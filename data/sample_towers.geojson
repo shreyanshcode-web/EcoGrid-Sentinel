@@ -1,0 +1,70 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "tower_id": "T_001",
+        "line_id": "TL_001",
+        "type": "Suspension",
+        "height_m": 45
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [77.10, 21.08]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "tower_id": "T_002",
+        "line_id": "TL_001",
+        "type": "Tension",
+        "height_m": 50
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [77.20, 21.13]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "tower_id": "T_003",
+        "line_id": "TL_001",
+        "type": "Suspension",
+        "height_m": 45
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [77.30, 21.18]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "tower_id": "T_004",
+        "line_id": "TL_002",
+        "type": "Suspension",
+        "height_m": 35
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [77.15, 21.33]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "tower_id": "T_005",
+        "line_id": "TL_002",
+        "type": "Tension",
+        "height_m": 40
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [77.35, 21.43]
+      }
+    }
+  ]
+}

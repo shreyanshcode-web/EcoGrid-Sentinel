@@ -1,0 +1,42 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "line_id": "TL_001",
+        "voltage_kv": 400,
+        "name": "Main 400kV Line",
+        "operator": "GridCorp"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [77.05, 21.05],
+          [77.15, 21.10],
+          [77.25, 21.15],
+          [77.35, 21.20],
+          [77.45, 21.25]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "line_id": "TL_002",
+        "voltage_kv": 220,
+        "name": "Secondary 220kV Line",
+        "operator": "GridCorp"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [77.10, 21.30],
+          [77.20, 21.35],
+          [77.30, 21.40],
+          [77.40, 21.45]
+        ]
+      }
+    }
+  ]
+}

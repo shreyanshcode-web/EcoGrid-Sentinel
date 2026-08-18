@@ -1,0 +1,106 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+data/output/
+data/ingestion/
+data/vegetation/
+data/spatial/
+data/temporal/
+data/features/
+data/risk/
+data/*.tif
+data/*.tiff
+data/*.gpkg
+data/*.geojson
+!data/sample_*.geojson
+logs/
+*.log
+
+# API / Dashboard
+dashboard/node_modules/
+dashboard/build/
+dashboard/.env.local
+dashboard/.env.development.local
+dashboard/.env.test.local
+dashboard/.env.production.local
+dashboard/npm-debug.log*
+dashboard/yarn-debug.log*
+dashboard/yarn-error.log*
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+
+# Planetary Computer / STAC cache
+~/.planetary-computer/
+~/.stac-client/
+
+# Large data files
+*.nc
+*.h5
+*.hdf5
+*.parquet
+*.pkl
+*.pickle
+
+# OS specific
+*.swp
+*.swo
