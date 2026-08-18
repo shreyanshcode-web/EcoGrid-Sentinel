@@ -142,6 +142,38 @@ cd dashboard && npm start
 # Opens http://localhost:3000
 ```
 
+### India data prototype (deployment-ready demo)
+
+The checked-in `data/` directory is the prototype's data source:
+
+- `GatiShakti_Transmission_Lines_220kV_plus.geojson` — 379 Indian 220 kV+ line features.
+- `SIH1379_ML_Training_Dataset.csv` — 1,659 labelled Indian observations used by the API and ML training.
+
+Train the reproducible India-specific inspection-priority classifier:
+
+```bash
+python src/ml/train_india_model.py \
+  --dataset data/SIH1379_ML_Training_Dataset.csv \
+  --output-dir data/models
+```
+
+This writes `data/models/india_risk_model.joblib` and a held-out evaluation
+report at `data/models/india_risk_model_metrics.json`. Start the API and build
+the dashboard for deployment:
+
+```bash
+python -m uvicorn src.api.main:app --host 0.0.0.0 --port 8000
+cd dashboard && npm run build
+```
+
+Deploy `dashboard/build` as a static site and configure its API proxy/base URL
+to the deployed FastAPI URL. The API exposes `/hotspots`, `/summary`,
+`/model/status`, and `/model/predict`.
+
+> The model is trained on the supplied SIH1379 labels. Its rare high-risk class
+> has only five examples, so its output is appropriate for prototype inspection
+> prioritization, not autonomous operational decisions.
+
 ---
 
 ## Project Structure

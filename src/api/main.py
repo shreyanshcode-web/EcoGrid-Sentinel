@@ -51,6 +51,9 @@ DATA_DIR = Path("./data")
 RISK_SCORES_PATH = DATA_DIR / "risk_scores.json"
 RISK_SUMMARY_PATH = DATA_DIR / "risk_summary.json"
 TRAINING_DATASET_PATH = DATA_DIR / "SIH1379_ML_Training_Dataset.csv"
+TRANSMISSION_LINES_PATH = DATA_DIR / "GatiShakti_Transmission_Lines_220kV_plus.geojson"
+INDIA_MODEL_PATH = DATA_DIR / "models" / "india_risk_model.joblib"
+INDIA_MODEL_METRICS_PATH = DATA_DIR / "models" / "india_risk_model_metrics.json"
 HOTSPOTS_GPKG_PATH = DATA_DIR / "corridor_segments.gpkg"
 NDVI_DIR = DATA_DIR / "ndvi"
 VEG_MASK_DIR = DATA_DIR / "vegetation_masks"
@@ -104,6 +107,14 @@ class RiskSummary(BaseModel):
     max_risk_score: float
     weights: Dict[str, float]
     thresholds: Dict[str, float]
+
+
+class IndiaRiskPredictionRequest(BaseModel):
+    DistanceToLine: float
+    NDVI: float
+    ProximityFactor: float
+    Vegetation: float
+    VegetationFactor: float
 
 
 # =============================================================================
@@ -248,6 +259,8 @@ async def root():
             "/hotspots/{id}": "Full detail for a specific hotspot",
             "/ndvi-layer": "NDVI imagery tiles",
             "/summary": "Risk summary statistics",
+            "/model/status": "India-specific ML model metadata",
+            "/model/predict": "India-specific ML risk-label prediction",
         },
     }
 
@@ -330,6 +343,46 @@ async def get_summary():
     """Get risk summary statistics."""
     summary = load_risk_summary()
     return JSONResponse(content=summary)
+
+
+@app.get("/transmission-lines")
+async def get_transmission_lines():
+    """Serve the full local PM GatiShakti 220 kV+ transmission-line layer."""
+    if not TRANSMISSION_LINES_PATH.exists():
+        raise HTTPException(status_code=404, detail="Transmission-line GeoJSON is not available")
+    with open(TRANSMISSION_LINES_PATH, encoding="utf-8") as f:
+        return JSONResponse(content=json.load(f))
+
+
+@app.get("/model/status")
+async def get_india_model_status():
+    """Return metadata for the locally trained SIH1379 India risk model."""
+    if not INDIA_MODEL_PATH.exists() or not INDIA_MODEL_METRICS_PATH.exists():
+        raise HTTPException(status_code=404, detail="India ML model has not been trained yet")
+    with open(INDIA_MODEL_METRICS_PATH, encoding="utf-8") as f:
+        metrics = json.load(f)
+    return JSONResponse(content={"ready": True, "model": INDIA_MODEL_PATH.name, "metrics": metrics})
+
+
+@app.post("/model/predict")
+async def predict_india_risk(request: IndiaRiskPredictionRequest):
+    """Predict the training-dataset risk label for one Indian observation."""
+    if not INDIA_MODEL_PATH.exists():
+        raise HTTPException(status_code=404, detail="India ML model has not been trained yet")
+    import joblib
+    import pandas as pd
+    artifact = joblib.load(INDIA_MODEL_PATH)
+    features = artifact["features"]
+    model = artifact["model"]
+    row = pd.DataFrame([{feature: getattr(request, feature) for feature in features}])
+    prediction = int(model.predict(row)[0])
+    probabilities = model.predict_proba(row)[0]
+    return JSONResponse(content={
+        "risk_label": prediction,
+        "risk_category": {0: "Low", 1: "Medium", 2: "High"}.get(prediction, "Unknown"),
+        "probabilities": {str(label): float(probability) for label, probability in zip(model.classes_, probabilities)},
+        "model_scope": "SIH1379 Indian training dataset inspection-priority prototype",
+    })
 
 
 @app.get("/ndvi-layer")
