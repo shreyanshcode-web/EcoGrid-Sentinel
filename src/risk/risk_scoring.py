@@ -275,29 +275,66 @@ class RiskScorer:
         )
 
         # NEW: Woody vegetation fraction (WorldCover)
-        woody_frac = df["worldcover_mean"].values if "worldcover_mean" in df.columns else np.zeros(len(df))
-        df["woody_fraction_score"] = self.compute_woody_fraction_score(woody_frac)
+        if "worldcover_mean" in df.columns:
+            woody_frac = df["worldcover_mean"].values
+            df["woody_fraction_score"] = self.compute_woody_fraction_score(woody_frac)
+            has_woody = True
+        else:
+            df["woody_fraction_score"] = np.zeros(len(df))
+            has_woody = False
 
         # NEW: Canopy height (GEDI)
-        canopy_h = df["gedi_canopy_height_mean"].values if "gedi_canopy_height_mean" in df.columns else np.zeros(len(df))
-        df["canopy_height_score"] = self.compute_canopy_height_score(canopy_h)
+        if "gedi_canopy_height_mean" in df.columns:
+            canopy_h = df["gedi_canopy_height_mean"].values
+            df["canopy_height_score"] = self.compute_canopy_height_score(canopy_h)
+            has_canopy = True
+        else:
+            df["canopy_height_score"] = np.zeros(len(df))
+            has_canopy = False
 
         # NEW: Terrain slope (DEM)
         # Note: dem_elevation_mean is elevation, not slope. Need slope if available.
         # For now use elevation as proxy, but ideally we'd have slope raster
-        terrain = df["dem_elevation_mean"].values if "dem_elevation_mean" in df.columns else np.zeros(len(df))
-        df["terrain_slope_score"] = self.compute_terrain_slope_score(terrain)
+        if "dem_elevation_mean" in df.columns:
+            terrain = df["dem_elevation_mean"].values
+            df["terrain_slope_score"] = self.compute_terrain_slope_score(terrain)
+            has_terrain = True
+        else:
+            df["terrain_slope_score"] = np.zeros(len(df))
+            has_terrain = False
 
-        # Compute weighted risk score
+        # Compute weighted risk score - only use weights for available features
+        weights_used = {}
+        weights_used["proximity"] = self.weights["proximity"]
+        weights_used["density"] = self.weights["density"]
+        weights_used["growth"] = self.weights["growth"]
+        weights_used["condition"] = self.weights["condition"]
+        if has_woody:
+            weights_used["woody_fraction"] = self.weights["woody_fraction"]
+        if has_canopy:
+            weights_used["canopy_height"] = self.weights["canopy_height"]
+        if has_terrain:
+            weights_used["terrain_slope"] = self.weights["terrain_slope"]
+
+        # Normalize weights to sum to 1
+        weight_sum = sum(weights_used.values())
+        if weight_sum > 0:
+            weights_used = {k: v / weight_sum for k, v in weights_used.items()}
+        else:
+            weights_used = {"proximity": 1.0}
+
         df["risk_score_raw"] = (
-            self.weights["proximity"] * df["proximity_score"]
-            + self.weights["density"] * df["density_score"]
-            + self.weights["growth"] * df["growth_score"]
-            + self.weights["condition"] * df["condition_score"]
-            + self.weights["woody_fraction"] * df["woody_fraction_score"]
-            + self.weights["canopy_height"] * df["canopy_height_score"]
-            + self.weights["terrain_slope"] * df["terrain_slope_score"]
+            weights_used["proximity"] * df["proximity_score"]
+            + weights_used["density"] * df["density_score"]
+            + weights_used["growth"] * df["growth_score"]
+            + weights_used["condition"] * df["condition_score"]
         )
+        if has_woody:
+            df["risk_score_raw"] += weights_used["woody_fraction"] * df["woody_fraction_score"]
+        if has_canopy:
+            df["risk_score_raw"] += weights_used["canopy_height"] * df["canopy_height_score"]
+        if has_terrain:
+            df["risk_score_raw"] += weights_used["terrain_slope"] * df["terrain_slope_score"]
 
         # Normalize to 0-1
         df["risk_score"] = normalize_feature(df["risk_score_raw"].values)
@@ -310,6 +347,8 @@ class RiskScorer:
         )
 
         # Create explainable breakdown for each segment
+        # Store the weights used for this computation
+        self._last_weights_used = weights_used
         df["risk_breakdown"] = df.apply(
             lambda row: self._create_breakdown_dict(row), axis=1
         )
@@ -318,78 +357,90 @@ class RiskScorer:
 
     def _create_breakdown_dict(self, row) -> Dict:
         """Create explainable risk breakdown dictionary for a segment."""
+        # Use the weights that were actually applied in computation
+        weights = getattr(self, '_last_weights_used', self.weights)
+
+        components = {
+            "proximity": {
+                "score": float(row["proximity_score"]),
+                "weight": weights.get("proximity", 0),
+                "weighted": float(row["proximity_score"] * weights.get("proximity", 0)),
+                "contribution_pct": float(
+                    row["proximity_score"] * weights.get("proximity", 0) / max(row["risk_score_raw"], 0.001) * 100
+                ),
+                "interpretation": self._interpret_proximity(row["mean_dist_to_line_m"]),
+            },
+            "density": {
+                "score": float(row["density_score"]),
+                "weight": weights.get("density", 0),
+                "weighted": float(row["density_score"] * weights.get("density", 0)),
+                "contribution_pct": float(
+                    row["density_score"] * weights.get("density", 0) / max(row["risk_score_raw"], 0.001) * 100
+                ),
+                "interpretation": self._interpret_density(row["vegetation_fraction"]),
+            },
+            "growth": {
+                "score": float(row["growth_score"]),
+                "weight": weights.get("growth", 0),
+                "weighted": float(row["growth_score"] * weights.get("growth", 0)),
+                "contribution_pct": float(
+                    row["growth_score"] * weights.get("growth", 0) / max(row["risk_score_raw"], 0.001) * 100
+                ),
+                "interpretation": self._interpret_growth(
+                    row.get("growth_rate_mean", 0)
+                ),
+            },
+            "condition": {
+                "score": float(row["condition_score"]),
+                "weight": weights.get("condition", 0),
+                "weighted": float(row["condition_score"] * weights.get("condition", 0)),
+                "contribution_pct": float(
+                    row["condition_score"] * weights.get("condition", 0) / max(row["risk_score_raw"], 0.001) * 100
+                ),
+                "interpretation": self._interpret_condition(
+                    row.get("late_ndvi_mean", 0)
+                ),
+            },
+        }
+
+        # Add optional components only if they were used in computation
+        if "woody_fraction" in weights:
+            components["woody_fraction"] = {
+                "score": float(row.get("woody_fraction_score", 0)),
+                "weight": weights["woody_fraction"],
+                "weighted": float(row.get("woody_fraction_score", 0) * weights["woody_fraction"]),
+                "contribution_pct": float(
+                    row.get("woody_fraction_score", 0) * weights["woody_fraction"] / max(row["risk_score_raw"], 0.001) * 100
+                ),
+                "interpretation": self._interpret_woody_fraction(row.get("worldcover_mean", 0)),
+            }
+
+        if "canopy_height" in weights:
+            components["canopy_height"] = {
+                "score": float(row.get("canopy_height_score", 0)),
+                "weight": weights["canopy_height"],
+                "weighted": float(row.get("canopy_height_score", 0) * weights["canopy_height"]),
+                "contribution_pct": float(
+                    row.get("canopy_height_score", 0) * weights["canopy_height"] / max(row["risk_score_raw"], 0.001) * 100
+                ),
+                "interpretation": self._interpret_canopy_height(row.get("gedi_canopy_height_mean", 0)),
+            }
+
+        if "terrain_slope" in weights:
+            components["terrain_slope"] = {
+                "score": float(row.get("terrain_slope_score", 0)),
+                "weight": weights["terrain_slope"],
+                "weighted": float(row.get("terrain_slope_score", 0) * weights["terrain_slope"]),
+                "contribution_pct": float(
+                    row.get("terrain_slope_score", 0) * weights["terrain_slope"] / max(row["risk_score_raw"], 0.001) * 100
+                ),
+                "interpretation": self._interpret_terrain_slope(row.get("dem_elevation_mean", 0)),
+            }
+
         return {
             "total_score": float(row["risk_score"]),
             "risk_category": str(row["risk_category"]),
-            "components": {
-                "proximity": {
-                    "score": float(row["proximity_score"]),
-                    "weight": self.weights["proximity"],
-                    "weighted": float(row["proximity_score"] * self.weights["proximity"]),
-                    "contribution_pct": float(
-                        row["proximity_score"] * self.weights["proximity"] / max(row["risk_score_raw"], 0.001) * 100
-                    ),
-                    "interpretation": self._interpret_proximity(row["mean_dist_to_line_m"]),
-                },
-                "density": {
-                    "score": float(row["density_score"]),
-                    "weight": self.weights["density"],
-                    "weighted": float(row["density_score"] * self.weights["density"]),
-                    "contribution_pct": float(
-                        row["density_score"] * self.weights["density"] / max(row["risk_score_raw"], 0.001) * 100
-                    ),
-                    "interpretation": self._interpret_density(row["vegetation_fraction"]),
-                },
-                "growth": {
-                    "score": float(row["growth_score"]),
-                    "weight": self.weights["growth"],
-                    "weighted": float(row["growth_score"] * self.weights["growth"]),
-                    "contribution_pct": float(
-                        row["growth_score"] * self.weights["growth"] / max(row["risk_score_raw"], 0.001) * 100
-                    ),
-                    "interpretation": self._interpret_growth(
-                        row.get("growth_rate_mean", 0)
-                    ),
-                },
-                "condition": {
-                    "score": float(row["condition_score"]),
-                    "weight": self.weights["condition"],
-                    "weighted": float(row["condition_score"] * self.weights["condition"]),
-                    "contribution_pct": float(
-                        row["condition_score"] * self.weights["condition"] / max(row["risk_score_raw"], 0.001) * 100
-                    ),
-                    "interpretation": self._interpret_condition(
-                        row.get("late_ndvi_mean", 0)
-                    ),
-                },
-                "woody_fraction": {
-                    "score": float(row.get("woody_fraction_score", 0)),
-                    "weight": self.weights["woody_fraction"],
-                    "weighted": float(row.get("woody_fraction_score", 0) * self.weights["woody_fraction"]),
-                    "contribution_pct": float(
-                        row.get("woody_fraction_score", 0) * self.weights["woody_fraction"] / max(row["risk_score_raw"], 0.001) * 100
-                    ),
-                    "interpretation": self._interpret_woody_fraction(row.get("worldcover_mean", 0)),
-                },
-                "canopy_height": {
-                    "score": float(row.get("canopy_height_score", 0)),
-                    "weight": self.weights["canopy_height"],
-                    "weighted": float(row.get("canopy_height_score", 0) * self.weights["canopy_height"]),
-                    "contribution_pct": float(
-                        row.get("canopy_height_score", 0) * self.weights["canopy_height"] / max(row["risk_score_raw"], 0.001) * 100
-                    ),
-                    "interpretation": self._interpret_canopy_height(row.get("gedi_canopy_height_mean", 0)),
-                },
-                "terrain_slope": {
-                    "score": float(row.get("terrain_slope_score", 0)),
-                    "weight": self.weights["terrain_slope"],
-                    "weighted": float(row.get("terrain_slope_score", 0) * self.weights["terrain_slope"]),
-                    "contribution_pct": float(
-                        row.get("terrain_slope_score", 0) * self.weights["terrain_slope"] / max(row["risk_score_raw"], 0.001) * 100
-                    ),
-                    "interpretation": self._interpret_terrain_slope(row.get("dem_elevation_mean", 0)),
-                },
-            },
+            "components": components,
             "key_factors": self._identify_key_factors(row),
             "recommended_action": self._recommend_action(row),
         }

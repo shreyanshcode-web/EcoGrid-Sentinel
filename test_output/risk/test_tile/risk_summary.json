@@ -1,0 +1,19 @@
+{
+  "total_segments": 178,
+  "high_risk_count": 101,
+  "medium_risk_count": 0,
+  "low_risk_count": 77,
+  "mean_risk_score": 0.5674157289738521,
+  "max_risk_score": 1.0,
+  "weights": {
+    "proximity": 0.39999999999999997,
+    "density": 0.26666666666666666,
+    "growth": 0.19999999999999998,
+    "condition": 0.13333333333333333
+  },
+  "thresholds": {
+    "high": 0.7,
+    "medium": 0.4,
+    "low": 0.0
+  }
+}

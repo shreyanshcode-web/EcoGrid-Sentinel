@@ -28,15 +28,11 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-import numpy as np
-import rasterio
-from rasterio.features import rasterize
-from shapely.geometry import Polygon, shape
-
 import geopandas as gpd
 import numpy as np
+import pandas as pd
 import rasterio
-from rasterio.features import shapes
+from rasterio.features import rasterize, shapes
 from shapely.geometry import (
     Point,
     LineString,
@@ -315,9 +311,7 @@ class SpatialAnalyzer:
             veg_gdf["dist_to_tower_m"] = veg_gdf.geometry.apply(
                 lambda geom: self._distance_to_nearest_tower(geom)
             )
-            veg_gdf["near_tower"] = (
-                veg_gdf["dist_to_tower_m"] <= self.tower_influence_m
-            )
+            veg_gdf["near_tower"] = veg_gdf["dist_to_tower_m"] <= self.tower_influence_m
         else:
             veg_gdf["dist_to_tower_m"] = np.nan
             veg_gdf["near_tower"] = False
@@ -365,8 +359,11 @@ class SpatialAnalyzer:
     def _distance_to_nearest_tower(self, geom) -> float:
         """Compute distance from geometry to nearest tower."""
         centroid = geom.centroid
-        nearest = nearest_points(centroid, self.tower_tree.geometries)[1]
-        return centroid.distance(nearest)
+        # Query STRtree for nearest tower
+        # nearest() returns the index of the nearest geometry
+        nearest_idx = self.tower_tree.nearest(centroid)
+        nearest_tower = self.tower_geoms[nearest_idx]
+        return centroid.distance(nearest_tower)
 
     def compute_per_line_segment_features(
         self, veg_gdf: gpd.GeoDataFrame, segment_length_m: float = 500.0

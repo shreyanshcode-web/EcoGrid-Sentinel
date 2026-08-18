@@ -1,0 +1,10 @@
+{
+  "status": "UNAVAILABLE",
+  "reason": "DEM tiles not accessible via STAC \u2014 implement AWS Open Data SRTM fallback",
+  "data_source": "Copernicus DEM GLO-30",
+  "data_source_url": "https://dataspace.copernicus.eu/explore-data/data-collections/copernicus-contributing-missions/collections-description/COP-DEM",
+  "fallback": "SRTM (90m) via AWS Open Data",
+  "fallback_url": "https://registry.opendata.aws/srtm/",
+  "aoi": "data\\sample_aoi.geojson",
+  "note": "DEM unavailable \u2014 system proceeds without terrain derivatives. Add DEM for slope/aspect context."
+}

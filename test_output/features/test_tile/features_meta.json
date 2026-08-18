@@ -1,0 +1,32 @@
+{
+  "num_segments": 178,
+  "num_features": 25,
+  "feature_names": [
+    "segment_id",
+    "vegetation_fraction",
+    "veg_patch_count",
+    "total_veg_area_m2",
+    "mean_veg_area_m2",
+    "max_veg_area_m2",
+    "mean_dist_to_line_m",
+    "min_dist_to_line_m",
+    "mean_dist_to_corridor_edge_m",
+    "pct_inside_corridor",
+    "pct_near_tower",
+    "veg_class_1_count",
+    "veg_class_2_count",
+    "veg_class_3_count",
+    "veg_class_1_area",
+    "veg_class_2_area",
+    "veg_class_3_area",
+    "ndvi_change_mean",
+    "ndvi_change_std",
+    "growth_rate_mean",
+    "growth_rate_std",
+    "pct_significant_increase",
+    "pct_significant_decrease",
+    "segment_length_m",
+    "segment_geometry"
+  ],
+  "crs": "EPSG:3857"
+}

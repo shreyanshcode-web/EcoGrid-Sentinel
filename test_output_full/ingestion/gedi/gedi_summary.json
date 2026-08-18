@@ -1,0 +1,10 @@
+{
+  "status": "UNAVAILABLE",
+  "reason": "Earth Engine authentication required for GEDI access",
+  "data_source": "NASA GEDI L2A",
+  "data_source_url": "https://www.earthdata.nasa.gov/data/catalog/lpcloud-gedi02-a-002",
+  "aoi": "data\\sample_aoi.geojson",
+  "year": 2024,
+  "coverage_fraction": 0.0,
+  "note": "GEDI canopy height unavailable \u2014 system uses Sentinel-2 NDVI as proxy only. Do NOT treat NDVI as canopy height."
+}
