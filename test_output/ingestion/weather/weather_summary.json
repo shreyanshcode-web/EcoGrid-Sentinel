@@ -1,0 +1,6 @@
+{
+  "status": "ERROR",
+  "reason": "422 Client Error:  for url: https://power.larc.nasa.gov/api/temporal/daily/point?parameters=PRECTOTCORR%2CT2M%2CT2M_MAX%2CT2M_MIN%2CRH2M%2CWS2M%2CALLSKY_SFC_SW_DWN%2CCLRSKY_SFC_SW_DWN&community=AG&longitude=77.25&latitude=21.25&start=2024-01-01&end=2024-01-31&format=JSON",
+  "data_source": "NASA POWER",
+  "data_source_url": "https://power.larc.nasa.gov/"
+}

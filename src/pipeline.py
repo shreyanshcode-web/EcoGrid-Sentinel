@@ -90,18 +90,18 @@ class Pipeline:
                 f.write(f"STDERR:\n{result.stderr}\n")
 
             if result.returncode == 0:
-                print(f"✓ {description} completed successfully")
+                print(f"[OK] {description} completed successfully")
                 return True
             else:
-                print(f"✗ {description} failed with exit code {result.returncode}")
+                print(f"[FAIL] {description} failed with exit code {result.returncode}")
                 print(f"  STDERR: {result.stderr[:500]}")
                 return False
 
         except subprocess.TimeoutExpired:
-            print(f"✗ {description} timed out after 1 hour")
+            print(f"[FAIL] {description} timed out after 1 hour")
             return False
         except Exception as e:
-            print(f"✗ {description} failed with error: {e}")
+            print(f"[FAIL] {description} failed with error: {e}")
             return False
 
     def stage1_ingestion(self) -> bool:
@@ -412,7 +412,7 @@ class Pipeline:
             success = stage_fn()
             results[name] = success
             if not success:
-                print(f"\n⚠ {name} failed — continuing with remaining stages")
+                print(f"\n[WARN] {name} failed — continuing with remaining stages")
 
         # Copy final results
         self.copy_results()
@@ -422,15 +422,15 @@ class Pipeline:
         print(f"# PIPELINE SUMMARY")
         print(f"{'#'*60}")
         for name, success in results.items():
-            status = "✓ PASS" if success else "✗ FAIL"
+            status = "[OK] PASS" if success else "[FAIL] FAIL"
             print(f"  {status} - {name}")
 
         all_passed = all(results.values())
         print(f"\n{'='*60}")
         if all_passed:
-            print("✓ ALL STAGES PASSED")
+            print("[OK] ALL STAGES PASSED")
         else:
-            print("⚠ SOME STAGES FAILED — check logs")
+            print("[WARN] SOME STAGES FAILED — check logs")
         print(f"{'='*60}")
 
         return all_passed

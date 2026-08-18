@@ -31,7 +31,7 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import rasterio
-from rasterio.features import zonal_stats
+from rasterstats import zonal_stats
 from shapely.geometry import Point, shape
 from tqdm import tqdm
 
