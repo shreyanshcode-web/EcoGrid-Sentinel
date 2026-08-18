@@ -221,6 +221,13 @@ class Pipeline:
 
         output_dir = self.output_dir / "spatial"
 
+        # Find WorldCover woody mask
+        ingestion_dir = self.output_dir / "ingestion"
+        worldcover_files = list(ingestion_dir.glob("worldcover/woody_vegetation_combined.tif"))
+        if not worldcover_files:
+            worldcover_files = list(ingestion_dir.glob("worldcover/woody_vegetation_tile_*.tif"))
+        worldcover_path = str(worldcover_files[0]) if worldcover_files else None
+
         # Process each mask file
         success_count = 0
         for mask_file in mask_files:
@@ -235,6 +242,8 @@ class Pipeline:
             ]
             if self.tower_locations:
                 cmd.extend(["--tower-locations", self.tower_locations])
+            if worldcover_path:
+                cmd.extend(["--worldcover-mask", worldcover_path])
 
             if self.run_command(cmd, f"Spatial Analysis - {tile_id}"):
                 success_count += 1

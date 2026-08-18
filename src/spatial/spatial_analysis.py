@@ -65,6 +65,7 @@ class SpatialAnalyzer:
         tower_geojson: Optional[str] = None,
         corridor_buffer_m: float = DEFAULT_CORRIDOR_BUFFER_M,
         tower_influence_m: float = DEFAULT_TOWER_INFLUENCE_M,
+        worldcover_mask_path: Optional[str] = None,
     ):
         """
         Initialize spatial analyzer.
@@ -74,9 +75,11 @@ class SpatialAnalyzer:
             tower_geojson: Path to GeoJSON with tower locations (optional)
             corridor_buffer_m: Corridor half-width in meters (default 50m)
             tower_influence_m: Tower influence radius in meters (default 200m)
+            worldcover_mask_path: Path to WorldCover woody vegetation mask raster (optional)
         """
         self.corridor_buffer_m = corridor_buffer_m
         self.tower_influence_m = tower_influence_m
+        self.worldcover_mask_path = worldcover_mask_path
 
         # Load transmission lines
         self.lines_gdf = gpd.read_file(transmission_line_geojson)
@@ -94,12 +97,28 @@ class SpatialAnalyzer:
             if self.towers_gdf.crs and self.towers_gdf.crs.is_geographic:
                 self.towers_gdf = self.towers_gdf.to_crs(self.work_crs)
 
+        # Load WorldCover woody mask (optional)
+        self.worldcover_mask = None
+        self.worldcover_transform = None
+        if worldcover_mask_path:
+            self._load_worldcover_mask(worldcover_mask_path)
+
         # Create corridor geometry (buffer around lines)
         self.corridor = self._create_corridor()
         self.corridor_buffer = self._create_corridor_buffer()
 
         # Build spatial indices
         self._build_spatial_indices()
+
+    def _load_worldcover_mask(self, mask_path: str):
+        """Load WorldCover woody vegetation mask raster."""
+        try:
+            with rasterio.open(mask_path) as src:
+                self.worldcover_mask = src.read(1)
+                self.worldcover_transform = src.transform
+            print(f"  Loaded WorldCover woody mask: {mask_path}")
+        except Exception as e:
+            print(f"  Warning: Could not load WorldCover mask: {e}")
 
     def _create_corridor(self) -> Polygon:
         """Create corridor geometry by buffering transmission lines."""
@@ -157,6 +176,7 @@ class SpatialAnalyzer:
     ) -> gpd.GeoDataFrame:
         """
         Convert raster vegetation mask to vector polygons.
+        Optionally filters patches using WorldCover woody vegetation mask.
 
         Args:
             mask_path: Path to vegetation mask GeoTIFF (1=vegetation, 0=non-veg)
@@ -193,8 +213,74 @@ class SpatialAnalyzer:
         gdf["area_m2"] = gdf.geometry.area
         gdf = gdf[gdf["area_m2"] >= min_patch_area_m2].reset_index(drop=True)
 
+        # Optionally filter with WorldCover woody vegetation mask
+        if self.worldcover_mask is not None and self.worldcover_transform is not None:
+            print("  Filtering vegetation patches with WorldCover woody vegetation mask...")
+            gdf = self._filter_with_worldcover(gdf)
+
         print(f"  Vectorized {len(gdf)} vegetation patches (min area: {min_patch_area_m2} m²)")
         return gdf
+
+    def _filter_with_worldcover(self, veg_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+        """
+        Filter vegetation patches to keep only those overlapping with
+        WorldCover woody vegetation classes (10: Tree cover, 20: Shrubland, 95: Mangroves).
+        """
+        if len(veg_gdf) == 0:
+            return veg_gdf
+
+        # Transform veg_gdf to WorldCover CRS if needed
+        wc_crs = None
+        try:
+            with rasterio.open(self.worldcover_mask_path) as src:
+                wc_crs = src.crs
+        except:
+            wc_crs = None
+
+        if wc_crs and veg_gdf.crs and veg_gdf.crs != wc_crs:
+            veg_gdf_wc = veg_gdf.to_crs(wc_crs)
+        else:
+            veg_gdf_wc = veg_gdf
+
+        # Rasterize vegetation patches to match WorldCover grid
+        veg_raster = rasterize(
+            [(geom, 1) for geom in veg_gdf_wc.geometry],
+            out_shape=self.worldcover_mask.shape,
+            transform=self.worldcover_transform,
+            fill=0,
+            dtype=np.uint8
+        )
+
+        # Create combined mask: vegetation AND woody (WorldCover classes 10, 20, 95)
+        woody_classes = {10, 20, 95}
+        woody_mask = np.isin(self.worldcover_mask, list(woody_classes)).astype(np.uint8)
+        combined_mask = veg_raster * woody_mask
+
+        # Extract patches from combined mask
+        from rasterio.features import shapes as raster_shapes
+        patch_dicts = [
+            {"properties": {"veg_id": i + 1}, "geometry": shape(geom)}
+            for i, (geom, value) in enumerate(
+                raster_shapes(combined_mask, mask=combined_mask, transform=self.worldcover_transform)
+            )
+            if value == 1
+        ]
+
+        if not patch_dicts:
+            print("  No woody vegetation patches found after WorldCover filtering")
+            return gpd.GeoDataFrame(columns=["geometry", "veg_id", "area_m2"], crs=wc_crs or veg_gdf_wc.crs)
+
+        # Convert back to original CRS
+        woody_gdf = gpd.GeoDataFrame.from_features(patch_dicts, crs=wc_crs or veg_gdf_wc.crs)
+        if self.work_crs and woody_gdf.crs and woody_gdf.crs != self.work_crs:
+            woody_gdf = woody_gdf.to_crs(self.work_crs)
+
+        # Recalculate area
+        woody_gdf["area_m2"] = woody_gdf.geometry.area
+        woody_gdf = woody_gdf[woody_gdf["area_m2"] >= 100.0].reset_index(drop=True)
+
+        print(f"  Filtered from {len(veg_gdf)} to {len(woody_gdf)} woody vegetation patches")
+        return woody_gdf
 
     def compute_distance_features(self, veg_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         """
@@ -373,6 +459,10 @@ def main():
     parser.add_argument(
         "--vegetation-mask", required=True, help="Path to vegetation mask GeoTIFF"
     )
+    parser.add_argument(
+        "--worldcover-mask",
+        help="Path to WorldCover woody vegetation mask GeoTIFF (optional)"
+    )
     parser.add_argument("--output-dir", required=True, help="Output directory")
     parser.add_argument(
         "--corridor-buffer-m",
@@ -403,6 +493,7 @@ def main():
         transmission_line_geojson=args.transmission_lines,
         tower_geojson=args.tower_locations,
         corridor_buffer_m=args.corridor_buffer_m,
+        worldcover_mask_path=args.worldcover_mask,
     )
 
     # Vectorize vegetation mask
