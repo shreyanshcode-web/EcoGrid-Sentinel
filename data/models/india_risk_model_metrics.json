@@ -1,0 +1,69 @@
+{
+  "dataset": "SIH1379_ML_Training_Dataset.csv",
+  "rows_used": 1659,
+  "train_rows": 1327,
+  "test_rows": 332,
+  "class_counts": {
+    "0": 1048,
+    "1": 606,
+    "2": 5
+  },
+  "balanced_accuracy": 0.6524727797455071,
+  "classification_report": {
+    "0": {
+      "precision": 0.985781990521327,
+      "recall": 0.9904761904761905,
+      "f1-score": 0.9881235154394299,
+      "support": 210.0
+    },
+    "1": {
+      "precision": 0.975,
+      "recall": 0.9669421487603306,
+      "f1-score": 0.970954356846473,
+      "support": 121.0
+    },
+    "2": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1-score": 0.0,
+      "support": 1.0
+    },
+    "accuracy": 0.9789156626506024,
+    "macro avg": {
+      "precision": 0.6535939968404424,
+      "recall": 0.6524727797455071,
+      "f1-score": 0.6530259574286342,
+      "support": 332.0
+    },
+    "weighted avg": {
+      "precision": 0.9788831867755382,
+      "recall": 0.9789156626506024,
+      "f1-score": 0.9788898054840467,
+      "support": 332.0
+    }
+  },
+  "confusion_matrix": [
+    [
+      208,
+      2,
+      0
+    ],
+    [
+      3,
+      117,
+      1
+    ],
+    [
+      0,
+      1,
+      0
+    ]
+  ],
+  "feature_importance": {
+    "DistanceToLine": 0.2663680845977729,
+    "NDVI": 0.23319548339640336,
+    "ProximityFactor": 0.23692500348740572,
+    "Vegetation": 0.0023993839458555572,
+    "VegetationFactor": 0.26111204457256254
+  }
+}

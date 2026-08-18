@@ -12,6 +12,7 @@ infrastructure data sensitivity requires proper authentication.
 """
 
 import json
+import csv
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -49,6 +50,7 @@ app.add_middleware(
 DATA_DIR = Path("./data")
 RISK_SCORES_PATH = DATA_DIR / "risk_scores.json"
 RISK_SUMMARY_PATH = DATA_DIR / "risk_summary.json"
+TRAINING_DATASET_PATH = DATA_DIR / "SIH1379_ML_Training_Dataset.csv"
 HOTSPOTS_GPKG_PATH = DATA_DIR / "corridor_segments.gpkg"
 NDVI_DIR = DATA_DIR / "ndvi"
 VEG_MASK_DIR = DATA_DIR / "vegetation_masks"
@@ -115,7 +117,44 @@ def load_hotspots():
         return _cache["hotspots"]
 
     if not RISK_SCORES_PATH.exists():
-        return []
+        # A runnable, data-backed fallback for first-time setup.  The project
+        # ships labelled point observations, so the dashboard can be used
+        # before the optional Sentinel/GDAL processing pipeline has produced
+        # risk_scores.json.  Generated pipeline results always take priority.
+        if not TRAINING_DATASET_PATH.exists():
+            return []
+        hotspots = []
+        with open(TRAINING_DATASET_PATH, newline="", encoding="utf-8-sig") as f:
+            for index, row in enumerate(csv.DictReader(f), start=1):
+                try:
+                    score = float(row["RiskScore"])
+                    label = int(float(row["RiskLabel"]))
+                    longitude = float(row["longitude"])
+                    latitude = float(row["latitude"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                category = "High" if label >= 2 or score >= 0.55 else "Medium" if label >= 1 or score >= 0.35 else "Low"
+                ndvi = float(row.get("NDVI") or 0)
+                vegetation = float(row.get("Vegetation") or 0)
+                hotspots.append({
+                    "id": index,
+                    "segment_id": index,
+                    "risk_score": score,
+                    "risk_category": category,
+                    "vegetation_fraction": vegetation,
+                    "mean_dist_to_line_m": float(row.get("DistanceToLine") or 0),
+                    "ndvi": ndvi,
+                    "geometry": {"type": "Point", "coordinates": [longitude, latitude]},
+                    "breakdown": {
+                        "total_score": score,
+                        "risk_category": category,
+                        "components": {},
+                        "key_factors": ["Risk score from SIH1379 labelled training dataset"],
+                        "recommended_action": "Review in the field-inspection workflow.",
+                    },
+                })
+        _cache["hotspots"] = hotspots
+        return hotspots
 
     with open(RISK_SCORES_PATH) as f:
         hotspots = json.load(f)
@@ -143,15 +182,17 @@ def load_risk_summary() -> Dict:
         return _cache["risk_summary"]
 
     if not RISK_SUMMARY_PATH.exists():
+        hotspots = load_hotspots()
+        scores = [h.get("risk_score", 0) for h in hotspots]
         return {
-            "total_segments": 0,
-            "high_risk_count": 0,
-            "medium_risk_count": 0,
-            "low_risk_count": 0,
-            "mean_risk_score": 0,
-            "max_risk_score": 0,
+            "total_segments": len(hotspots),
+            "high_risk_count": sum(h.get("risk_category") == "High" for h in hotspots),
+            "medium_risk_count": sum(h.get("risk_category") == "Medium" for h in hotspots),
+            "low_risk_count": sum(h.get("risk_category") == "Low" for h in hotspots),
+            "mean_risk_score": sum(scores) / len(scores) if scores else 0,
+            "max_risk_score": max(scores) if scores else 0,
             "weights": {},
-            "thresholds": {},
+            "thresholds": {"high": 0.55, "medium": 0.35},
         }
 
     with open(RISK_SUMMARY_PATH) as f:
