@@ -289,3 +289,31 @@ Example `/hotspots` response:
 ## License
 
 MIT License — Hackathon prototype for SIH1379.
+
+## Data Sources
+
+The project uses the following datasets for vegetation analysis, transmission-line mapping, and validation:
+
+### 1. Sentinel-2 Surface Reflectance
+- **Source:** ESA / Copernicus
+- **Google Earth Engine Dataset:** `COPERNICUS/S2_SR_HARMONIZED`
+- **Purpose:** Satellite-based vegetation monitoring and NDVI calculation.
+- **Access:** Google Earth Engine
+
+### 2. GridFinder Power Grid Dataset
+- **Source:** GridFinder / World Bank research dataset
+- **Purpose:** Initial power-grid and transmission-line spatial analysis.
+- **Usage:** Distance-to-power-line analysis and preliminary infrastructure mapping.
+
+### 3. PM GatiShakti 220 kV+ Transmission Lines
+- **Source:** Ministry of Power, Government of India, through PM GatiShakti
+- **Dataset:** 220 kV+ transmission lines
+- **Purpose:** Mapping and validation of high-voltage transmission infrastructure.
+- **Local files:**
+  - `data/GatiShakti_Transmission_Lines_220kV_plus.geojson`
+  - `data/GatiShakti_220kV_Transmission_Shapefile.zip`
+
+### 4. Study Area
+- **Location:** Kanpur region, Uttar Pradesh, India
+- **Source:** Project-defined geometry
+- **Purpose:** Defines the geographical boundary used for vegetation and transmission-corridor analysis.
