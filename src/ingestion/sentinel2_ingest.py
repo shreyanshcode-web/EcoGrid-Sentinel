@@ -2,20 +2,31 @@
 """
 Sentinel-2 Ingestion Script (Stage 1)
 
-Pulls Sentinel-2 bands (B2, B3, B4, B8) for a given AOI + date range
-via Planetary Computer STAC API. Outputs clipped, reprojected GeoTIFF tiles
-+ metadata JSON.
+Pulls Sentinel-2 Level-2A Surface Reflectance bands (B2, B3, B4, B8) for a
+given AOI + date range via Copernicus Data Space Ecosystem STAC API.
+
+Canonical source: https://dataspace.copernicus.eu/
+Sentinel-2 collection: https://dataspace.copernicus.eu/data-collections/copernicus-sentinel-missions/sentinel-2
+
+Alternative access: Google Earth Engine (for prototyping) — Copernicus remains
+canonical reference.
+
+Outputs clipped, reprojected GeoTIFF tiles + metadata JSON.
 
 Known Limitations (documented per project spec):
-1. Sentinel-2 is 10m resolution — cannot resolve individual trees near conductors.
-   Risk scores are corridor-segment-level, not tree-level.
-2. Cloud filtering uses scene-level cloud cover metadata (not per-pixel masking).
-   For v1, skip full per-pixel cloud masking — use SCL band if available.
+1. Sentinel-2 is 10m resolution (B2/B3/B4/B8) — cannot resolve individual trees
+   near conductors. Risk scores are corridor-segment-level, not tree-level.
+2. Cloud filtering uses scene-level cloud cover metadata (from product quality
+   info). Per-pixel cloud masking via SCL band optional; never silently discard
+   quality information — all quality metadata is stored per result.
 3. No canopy height data — NDVI/vegetation fraction is a proxy, not direct
    measurement of fall/contact risk.
 4. No historical incident/outage ground truth — risk model must be explicit
    weighted heuristic, not supervised ML.
-5. Land cover data not guaranteed — flag when NDVI-high areas might be cropland.
+5. Land cover data not guaranteed — flag when NDVI-high areas might be cropland
+   vs. woody vegetation. ESA WorldCover / Bhuvan used to disambiguate where available.
+6. Do NOT claim Sentinel-2 alone can determine whether a specific tree will
+   physically contact a conductor. This is a corridor-scale screening system.
 """
 
 import argparse
@@ -91,10 +102,13 @@ class Sentinel2Ingestor:
         self.aoi_bounds = self.aoi_gdf.total_bounds  # [minx, miny, maxx, maxy]
         self.aoi_geometry = self.aoi_gdf.geometry.unary_union
 
-        # STAC client for Planetary Computer
+        # STAC client for Copernicus Data Space Ecosystem
+        # Canonical source: https://dataspace.copernicus.eu/
         self.catalog = pystac_client.Client.open(
-            "https://planetarycomputer.microsoft.com/api/stac/v1",
-            modifier=pc.sign_inplace,
+            "https://catalogue.dataspace.copernicus.eu/stac/",
+            # Note: For production, consider implementing proper authentication
+            # via Copernicus Data Space OAuth. For prototyping, public access
+            # to Sentinel-2 L2A STAC catalog works without auth.
         )
 
     def search_items(self) -> List:
@@ -105,7 +119,7 @@ class Sentinel2Ingestor:
         print(f"  Max cloud cover: {self.cloud_cover_max}%")
 
         search = self.catalog.search(
-            collections=["sentinel-2-l2a"],
+            collections=["SENTINEL-2-L2A"],
             intersects=self.aoi_geometry,
             datetime=f"{self.start_date}/{self.end_date}",
             query={"eo:cloud_cover": {"lt": self.cloud_cover_max}},
@@ -217,17 +231,28 @@ class Sentinel2Ingestor:
             ) as dst:
                 dst.write(band_data[band_name], 1)
 
-        # Build metadata
+        # Build metadata with full quality and provenance info
         metadata = {
             "tile_id": tile_id,
             "item_id": item_id,
             "datetime": item.datetime.isoformat() if item.datetime else None,
             "date": date_str,
+            "sensing_time": item.properties.get("sensing_time", None),
             "bounds": list(self.aoi_bounds),
             "cloud_cover": item.properties.get("eo:cloud_cover", None),
             "platform": item.properties.get("platform", None),
-            "bands": {b: str(self.output_dir / "geotiffs" / f"{tile_id}_{b}.tif") for b in BANDS_OF_INTEREST + [SCL_BAND]},
+            "processing_level": item.properties.get("processing:level", "L2A"),
+            "resolution_m": 10,  # B2/B3/B4/B8 are 10m
             "crs": self.target_crs,
+            "footprint": item.geometry,
+            "quality_info": {
+                "cloud_percentage": item.properties.get("eo:cloud_cover", None),
+                "valid_pixel_percentage": item.properties.get("valid_pixels", None),
+                "missing_pixel_percentage": item.properties.get("missing_pixels", None),
+            },
+            "bands": {b: str(self.output_dir / "geotiffs" / f"{tile_id}_{b}.tif") for b in BANDS_OF_INTEREST + [SCL_BAND]},
+            "data_source": "Copernicus Data Space Ecosystem",
+            "data_source_url": "https://dataspace.copernicus.eu/",
             "processed_at": datetime.utcnow().isoformat() + "Z",
         }
 

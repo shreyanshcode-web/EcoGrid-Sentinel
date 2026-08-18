@@ -8,6 +8,10 @@ Computes per-vegetation-patch distance features relative to transmission lines:
 - Tower proximity (distance to nearest tower)
 - Inside/outside corridor buffer (boolean)
 
+Integrates ESA WorldCover woody vegetation mask (optional) to filter
+vegetation patches - only woody vegetation (tree cover, shrubland, mangroves)
+is retained for risk analysis, excluding crops/grassland.
+
 Uses geopandas + shapely spatial index for performance.
 
 Known Limitations:
@@ -15,6 +19,7 @@ Known Limitations:
    Risk scores are corridor-segment-level, not tree-level.
 2. Tower locations may be approximate (from GeoJSON/Shapefile data).
 3. Corridor width is defined as a buffer around lines, not actual surveyed corridor.
+4. WorldCover is static (2020/2021) — may not reflect current conditions.
 """
 
 import argparse
@@ -22,6 +27,11 @@ import json
 import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+import numpy as np
+import rasterio
+from rasterio.features import rasterize
+from shapely.geometry import Polygon, shape
 
 import geopandas as gpd
 import numpy as np

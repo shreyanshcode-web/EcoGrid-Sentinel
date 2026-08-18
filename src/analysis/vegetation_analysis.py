@@ -6,6 +6,10 @@ Computes NDVI = (B8 - B4) / (B8 + B4) from Sentinel-2 bands,
 creates vegetation mask via configurable threshold (default 0.3),
 applies morphological operations for denoising.
 
+Integrates ESA WorldCover (optional) to distinguish woody vegetation
+(tree cover, shrubland, mangroves) from non-woody vegetation
+(cropland, grassland, herbaceous wetland).
+
 Known Limitations:
 1. Sentinel-2 is 10m resolution — cannot resolve individual trees near conductors.
    Risk scores are corridor-segment-level, not tree-level.
@@ -13,7 +17,7 @@ Known Limitations:
    measurement of fall/contact risk.
 3. U-Net segmentation deferred to v2 — this uses threshold-based masking only.
    A stub function is provided for future U-Net upgrade.
-4. Land cover data not guaranteed — flag when NDVI-high areas might be cropland.
+4. WorldCover is 10m and static (2020/2021) — may not reflect current conditions.
 """
 
 import argparse
@@ -50,12 +54,49 @@ class VegetationAnalyzer:
         opening_radius: int = DEFAULT_OPENING_RADIUS,
         closing_radius: int = DEFAULT_CLOSING_RADIUS,
         min_patch_pixels: int = MIN_VEGETATION_PATCH_PIXELS,
+        worldcover_path: Optional[str] = None,
     ):
         self.ndvi_threshold_low = ndvi_threshold_low
         self.ndvi_threshold_high = ndvi_threshold_high
         self.opening_radius = opening_radius
         self.closing_radius = closing_radius
         self.min_patch_pixels = min_patch_pixels
+        self.worldcover_path = worldcover_path
+
+    def load_worldcover(self) -> Optional[np.ndarray]:
+        """Load WorldCover raster if available."""
+        if not self.worldcover_path:
+            return None
+        try:
+            with rasterio.open(self.worldcover_path) as src:
+                wc = src.read(1)
+            return wc
+        except Exception as e:
+            print(f"  Warning: Could not load WorldCover: {e}")
+            return None
+
+    def create_woody_vegetation_mask(self, ndvi: np.ndarray, worldcover: np.ndarray) -> np.ndarray:
+        """
+        Create vegetation mask restricted to woody vegetation classes.
+
+        WorldCover woody classes:
+        - 10: Tree cover
+        - 20: Shrubland
+        - 95: Mangroves
+
+        Non-woody vegetation classes (high NDVI but not trees):
+        - 30: Grassland
+        - 40: Cropland
+        - 90: Herbaceous wetland
+        """
+        woody_classes = {10, 20, 95}
+        woody_mask = np.isin(worldcover, list(woody_classes)).astype(np.uint8)
+
+        # Combine: vegetation (NDVI > threshold) AND woody (WorldCover)
+        veg_mask = (ndvi >= self.ndvi_threshold_low).astype(np.uint8)
+        woody_veg_mask = veg_mask * woody_mask
+
+        return woody_veg_mask
 
     def compute_ndvi(self, nir_path: str, red_path: str) -> Tuple[np.ndarray, Dict]:
         """
@@ -215,9 +256,18 @@ class VegetationAnalyzer:
         print(f"Computing NDVI for {tile_id}...")
         ndvi, ndvi_meta = self.compute_ndvi(nir_path, red_path)
 
+        # Load WorldCover if available
+        worldcover = self.load_worldcover()
+
         # Create vegetation mask
         print(f"Creating vegetation mask...")
-        veg_mask = self.create_vegetation_mask(ndvi)
+        if worldcover is not None:
+            print(f"  Using WorldCover to filter woody vegetation...")
+            veg_mask = self.create_woody_vegetation_mask(ndvi, worldcover)
+            has_worldcover = True
+        else:
+            veg_mask = self.create_vegetation_mask(ndvi)
+            has_worldcover = False
 
         # Remove small patches
         veg_mask_clean = self.remove_small_patches(veg_mask)
@@ -265,12 +315,13 @@ class VegetationAnalyzer:
 
         # Vegetation mask
         im2 = axes[1].imshow(veg_mask_clean, cmap="Greens", aspect="auto")
-        axes[1].set_title("Vegetation Mask (Cleaned)")
+        title_suffix = " (Woody Only)" if has_worldcover else " (All Vegetation)"
+        axes[1].set_title(f"Vegetation Mask (Cleaned){title_suffix}")
         plt.colorbar(im2, ax=axes[1])
 
         # Class map
         im3 = axes[2].imshow(class_map, cmap="YlGn", vmin=0, vmax=3, aspect="auto")
-        axes[2].set_title("Vegetation Classes")
+        axes[2].set_title("Vegetation Classes (NDVI-based)")
         plt.colorbar(im3, ax=axes[2])
 
         plt.tight_layout()
@@ -291,6 +342,7 @@ class VegetationAnalyzer:
             "dense_veg_pixels": int(np.sum(class_map == 3)),
             "threshold_low": self.ndvi_threshold_low,
             "threshold_high": self.ndvi_threshold_high,
+            "has_worldcover": has_worldcover,
             "ndvi_path": str(ndvi_path),
             "mask_path": str(mask_path),
             "class_path": str(class_path),
@@ -312,6 +364,7 @@ def main():
     parser.add_argument("--tile-id", required=True, help="Tile ID to process")
     parser.add_argument("--bands-dir", required=True, help="Directory containing band GeoTIFFs")
     parser.add_argument("--output-dir", required=True, help="Output directory")
+    parser.add_argument("--worldcover-path", help="Path to WorldCover woody mask raster (optional)")
     parser.add_argument(
         "--ndvi-threshold",
         type=float,
@@ -330,6 +383,7 @@ def main():
     analyzer = VegetationAnalyzer(
         ndvi_threshold_low=args.ndvi_threshold,
         min_patch_pixels=args.min_patch_size,
+        worldcover_path=args.worldcover_path,
     )
 
     stats = analyzer.analyze_tile(args.tile_id, args.bands_dir, args.output_dir)
@@ -337,6 +391,8 @@ def main():
     print(f"  Vegetation fraction: {stats['vegetation_fraction']:.3f}")
     print(f"  NDVI mean: {stats['ndvi_mean']:.3f}")
     print(f"  Dense vegetation pixels: {stats['dense_veg_pixels']}")
+    if stats.get("has_worldcover"):
+        print(f"  WorldCover woody vegetation filter applied")
 
 
 if __name__ == "__main__":

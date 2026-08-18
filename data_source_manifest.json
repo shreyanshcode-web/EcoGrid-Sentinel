@@ -1,0 +1,293 @@
+{
+  "manifest_version": "1.0",
+  "project": "SIH1379 - AI-Powered Transmission Corridor Vegetation Risk Intelligence System",
+  "generated_at": "2026-08-18T00:00:00Z",
+  "description": "Canonical data source registry for vegetation risk intelligence pipeline. All sources are official, publicly accessible, and documented with tier priority, access method, and usage notes.",
+  "tier_definitions": {
+    "tier_1_required": "Must-have for MVP. Core functionality depends on these sources.",
+    "tier_2_recommended": "Strongly recommended for MVP. Significantly improves accuracy/robustness.",
+    "tier_3_advanced": "Advanced/optional. For future phases or specific use cases."
+  },
+  "data_sources": [
+    {
+      "id": "sentinel2_l2a",
+      "name": "Sentinel-2 Level-2A Surface Reflectance",
+      "tier": 1,
+      "category": "Satellite Imagery - Optical",
+      "provider": "European Space Agency (ESA) / Copernicus",
+      "canonical_url": "https://dataspace.copernicus.eu/data-collections/copernicus-sentinel-missions/sentinel-2",
+      "access_method": "STAC API",
+      "api_endpoint": "https://catalogue.dataspace.copernicus.eu/stac/",
+      "collection_id": "SENTINEL-2-L2A",
+      "bands_used": ["B02", "B03", "B04", "B08", "SCL"],
+      "spatial_resolution_m": 10,
+      "temporal_resolution_days": 5,
+      "revisit_days": 5,
+      "usage": "NDVI computation, vegetation fraction, vegetation condition proxy",
+      "limitations": [
+        "10m resolution cannot resolve individual trees near conductors",
+        "Cloud cover affects acquisition - quality metadata stored per result",
+        "No canopy height - NDVI is proxy, not direct fall/contact measurement",
+        "No historical incident/ground truth for supervised ML"
+      ],
+      "provenance_fields": [
+        "item_id",
+        "datetime",
+        "eo:cloud_cover",
+        "platform",
+        "processing:level",
+        "sensing_time",
+        "valid_pixels",
+        "missing_pixels"
+      ],
+      "ingestion_module": "src/ingestion/sentinel2_ingest.py",
+      "output_path": "ingestion/geotiffs/{tile_id}_{band}.tif",
+      "metadata_path": "ingestion/metadata/{tile_id}_meta.json"
+    },
+    {
+      "id": "esa_worldcover",
+      "name": "ESA WorldCover 10m Land Cover",
+      "tier": 1,
+      "category": "Land Cover Classification",
+      "provider": "European Space Agency (ESA)",
+      "canonical_url": "https://esa-worldcover.org/en/data-access",
+      "access_method": "STAC API (via Microsoft Planetary Computer mirror)",
+      "api_endpoint": "https://planetarycomputer.microsoft.com/api/stac/v1",
+      "collection_id": "esa-worldcover",
+      "years_available": [2020, 2021],
+      "spatial_resolution_m": 10,
+      "classes": {
+        "10": "Tree cover",
+        "20": "Shrubland",
+        "30": "Grassland",
+        "40": "Cropland",
+        "50": "Built-up",
+        "60": "Bare / sparse vegetation",
+        "70": "Snow and ice",
+        "80": "Permanent water bodies",
+        "90": "Herbaceous wetland",
+        "95": "Mangroves",
+        "100": "Moss and lichen"
+      },
+      "woody_vegetation_classes": [10, 20, 95],
+      "non_woody_vegetation_classes": [30, 40, 90],
+      "usage": "Distinguish woody vegetation (trees/shrubs) from non-woody (crops/grass) - critical for disambiguating NDVI-high cropland vs. tree risk",
+      "limitations": [
+        "Static product (2020/2021) - may not reflect current conditions",
+        "10m resolution matches Sentinel-2 but same spatial limitation",
+        "No vegetation height information"
+      ],
+      "provenance_fields": [
+        "year",
+        "tile_id",
+        "classes_present",
+        "woody_fraction"
+      ],
+      "ingestion_module": "src/ingestion/landcover_ingest.py",
+      "output_path": "ingestion/worldcover/woody_vegetation_combined.tif",
+      "metadata_path": "ingestion/worldcover/worldcover_summary.json"
+    },
+    {
+      "id": "nasa_gedi_l2a",
+      "name": "NASA GEDI L2A Canopy Height",
+      "tier": 2,
+      "category": "LiDAR - Canopy Structure",
+      "provider": "NASA / LP DAAC",
+      "canonical_url": "https://www.earthdata.nasa.gov/data/catalog/lpcloud-gedi02-a-002",
+      "access_method": "Google Earth Engine (rasterized LARSE/GEDI/GEDI02_A_002_MONTHLY)",
+      "api_endpoint": "https://earthengine.googleapis.com",
+      "gee_collection": "LARSE/GEDI/GEDI02_A_002_MONTHLY",
+      "metrics": {
+        "canopy_top_height": "Direct canopy top height (m)",
+        "rh_25": "Relative height 25th percentile (m)",
+        "rh_50": "Relative height 50th percentile (m) - median canopy height",
+        "rh_75": "Relative height 75th percentile (m)",
+        "rh_95": "Relative height 95th percentile (m)",
+        "canopy_cover": "Canopy cover fraction (L2B)",
+        "quality_flag": "GEDI quality flag"
+      },
+      "footprint_m": 25,
+      "temporal_coverage": "2019-present (ISS orbit, ~91.6° inclination, 400km altitude)",
+      "spatial_resolution_m": 25,
+      "coverage": "Sparse - ~25m footprints along orbital tracks, NOT continuous wall-to-wall",
+      "usage": "Direct canopy height measurement where available. Used for fall distance/reach estimation.",
+      "limitations": [
+        "SPARSE coverage - ~25m footprints along tracks, large gaps between tracks",
+        "Missing GEDI coverage MUST be represented explicitly - do NOT interpolate/invent height",
+        "Quality flag threshold required (quality_flag >= 1 for reliable data)",
+        "ISS orbit = irregular temporal sampling",
+        "Earth Engine authentication required"
+      ],
+      "provenance_fields": [
+        "year",
+        "quality_threshold",
+        "coverage_fraction",
+        "mean_canopy_height_m",
+        "max_canopy_height_m",
+        "gedi_footprint_m"
+      ],
+      "ingestion_module": "src/ingestion/gedi_ingest.py",
+      "output_path": "ingestion/gedi/canopy_height.tif",
+      "metadata_path": "ingestion/gedi/gedi_summary.json",
+      "fallback_behavior": "If Earth Engine unavailable, marks UNAVAILABLE and continues with Sentinel-2 + WorldCover only"
+    },
+    {
+      "id": "copernicus_dem",
+      "name": "Copernicus DEM (GLO-30 / GLO-90)",
+      "tier": 1,
+      "category": "Digital Elevation Model",
+      "provider": "ESA / Copernicus",
+      "canonical_url": "https://dataspace.copernicus.eu/explore-data/data-collections/copernicus-contributing-missions/collections-description/COP-DEM",
+      "access_method": "STAC API (Copernicus Data Space) or AWS Open Data (SRTM fallback)",
+      "api_endpoint": "https://catalogue.dataspace.copernicus.eu/stac/",
+      "collection_ids": ["COP-DEM-GLO-30", "COP-DEM-GLO-90"],
+      "resolutions": ["GLO-30 (30m)", "GLO-90 (90m)"],
+      "vertical_accuracy_m": "< 5m (RMSE) for GLO-30",
+      "usage": "Terrain elevation, slope, aspect, hillshade for terrain context and fall direction estimation",
+      "critical_note": "DEM elevation is NOT canopy height. Canopy height comes from GEDI (Tier 2), NOT from DEM.",
+      "derivatives_computed": [
+        "slope (degrees)",
+        "aspect (degrees, 0=north clockwise)",
+        "hillshade (for visualization)"
+      ],
+      "limitations": [
+        "DSM (Digital Surface Model) includes vegetation/building tops - NOT bare earth DTM",
+        "SRTM fallback (90m) if Copernicus DEM unavailable",
+        "No canopy height information"
+      ],
+      "provenance_fields": [
+        "resolution",
+        "tiles_processed",
+        "elevation_min_max_mean",
+        "slope_stats"
+      ],
+      "ingestion_module": "src/ingestion/dem_ingest.py",
+      "output_path": "ingestion/dem/dem_GLO-30_tile_{i}.tif",
+      "metadata_path": "ingestion/dem/dem_summary.json"
+    },
+    {
+      "id": "nasa_power",
+      "name": "NASA POWER (Prediction Of Worldwide Energy Resources)",
+      "tier": 2,
+      "category": "Weather / Climate Reanalysis",
+      "provider": "NASA / Langley Research Center",
+      "canonical_url": "https://power.larc.nasa.gov/",
+      "access_method": "REST API",
+      "api_endpoint": "https://power.larc.nasa.gov/api/temporal/daily/point",
+      "community": "AG (Agroclimatology)",
+      "parameters_requested": [
+        {"code": "PRECTOTCORR", "description": "Precipitation (mm/day)"},
+        {"code": "T2M", "description": "Temperature at 2m (°C)"},
+        {"code": "T2M_MAX", "description": "Max temperature at 2m (°C)"},
+        {"code": "T2M_MIN", "description": "Min temperature at 2m (°C)"},
+        {"code": "RH2M", "description": "Relative humidity at 2m (%)"},
+        {"code": "WS2M", "description": "Wind speed at 2m (m/s)"},
+        {"code": "ALLSKY_SFC_SW_DWN", "description": "All-sky shortwave radiation (MJ/m2/day)"},
+        {"code": "CLRSKY_SFC_SW_DWN", "description": "Clear-sky shortwave radiation (MJ/m2/day)"}
+      ],
+      "spatial_resolution_deg": 0.5,
+      "temporal_resolution": "Daily",
+      "temporal_coverage": "1981-present",
+      "query_method": "Point query at AOI centroid",
+      "usage": "Seasonal vegetation growth context - monsoon periods, drought/stress, growing degree days, water stress index",
+      "critical_note": "Weather data provides CONTEXT for vegetation growth analysis. Do NOT directly convert rainfall into risk score without validation. Use weather to understand seasonal patterns and data quality context for satellite observations.",
+      "derived_metrics": [
+        "total_precipitation_mm",
+        "mean_daily_precipitation_mm",
+        "max_daily_precipitation_mm",
+        "rainy_days (>1mm)",
+        "mean_temperature_c",
+        "max_temperature_c",
+        "min_temperature_c",
+        "mean_humidity_pct",
+        "mean_wind_speed_ms",
+        "mean_solar_radiation_mj_m2",
+        "growing_degree_days (base 10°C)",
+        "water_stress_index (precip / PET proxy)"
+      ],
+      "limitations": [
+        "0.5° resolution (~50km) - coarse for local corridor scale",
+        "Reanalysis/model data - not direct observations",
+        "Point query at AOI centroid - not spatially distributed"
+      ],
+      "provenance_fields": [
+        "latitude",
+        "longitude",
+        "date_range",
+        "parameters"
+      ],
+      "ingestion_module": "src/ingestion/weather_ingest.py",
+      "output_path": "ingestion/weather/nasa_power_daily.csv",
+      "metadata_path": "ingestion/weather/weather_summary.json"
+    }
+  ],
+  "advanced_future_sources": {
+    "tier_3": [
+      {
+        "id": "bhuvan_lulc",
+        "name": "Bhuvan LULC (Land Use Land Cover)",
+        "tier": 3,
+        "category": "Land Cover - India Specific",
+        "provider": "ISRO / NRSC",
+        "canonical_url": "https://bhuvan.nrsc.gov.in/",
+        "description": "India-specific land cover with finer classes relevant to Indian transmission corridors. Complements ESA WorldCover for India AOIs.",
+        "notes": "Requires Bhuvan portal access/API. Not yet integrated."
+      },
+      {
+        "id": "sentinel1_sar",
+        "name": "Sentinel-1 SAR (C-band)",
+        "tier": 3,
+        "category": "Satellite Imagery - SAR",
+        "provider": "ESA / Copernicus",
+        "canonical_url": "https://dataspace.copernicus.eu/data-collections/copernicus-sentinel-missions/sentinel-1",
+        "description": "All-weather, day/night SAR imagery. Can penetrate cloud cover. Useful for flood mapping, soil moisture, and vegetation structure.",
+        "notes": "Requires SAR processing expertise. Not yet integrated."
+      },
+      {
+        "id": "icesat2_atlas08",
+        "name": "ICESat-2 ATLAS/08 Land and Vegetation Height",
+        "tier": 3,
+        "category": "LiDAR - Canopy Height",
+        "provider": "NASA / NSIDC",
+        "canonical_url": "https://nsidc.org/data/atlas/icesat-2",
+        "description": "Photon-counting LiDAR with ~17m footprint, denser than GEDI in some regions. Complementary canopy height source.",
+        "notes": "Different orbital characteristics than GEDI. Not yet integrated."
+      }
+    ]
+  },
+  "pipeline_stages": {
+    "stage_1_ingestion": {
+      "1a": "sentinel2_l2a",
+      "1b": "esa_worldcover",
+      "1c": "nasa_gedi_l2a",
+      "1d": "copernicus_dem",
+      "1e": "nasa_power"
+    },
+    "stage_2_vegetation": "NDVI computation, vegetation masking (optionally filtered by WorldCover woody mask)",
+    "stage_3_spatial": "Distance to line, corridor edge, tower proximity using transmission infrastructure GeoJSON",
+    "stage_4_temporal": "NDVI change detection between dates (if multi-date)",
+    "stage_5_features": "Per-corridor-segment feature table combining all sources",
+    "stage_6_risk": "Weighted heuristic risk scoring with explainable breakdown"
+  },
+  "risk_scoring_weights": {
+    "proximity": 0.30,
+    "density": 0.20,
+    "growth": 0.15,
+    "condition": 0.10,
+    "woody_fraction": 0.10,
+    "canopy_height": 0.10,
+    "terrain_slope": 0.05
+  },
+  "risk_thresholds": {
+    "high": 0.7,
+    "medium": 0.4,
+    "low": 0.0
+  },
+  "output_formats": [
+    "GeoPackage (.gpkg) - for GIS consumption",
+    "CSV - for tabular analysis",
+    "JSON - for API consumption",
+    "GeoTIFF - for raster products"
+  ],
+  "disclaimer": "This system is a decision-support / inspection-prioritization platform. It does NOT claim Sentinel-2 alone can determine whether a specific tree will physically contact a conductor. Risk scores are corridor-segment-level (10m resolution), not tree-level."
+}

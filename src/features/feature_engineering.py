@@ -6,13 +6,19 @@ Builds a per-corridor-segment feature table combining:
 - Vegetation features (fraction, mean NDVI, class distribution)
 - Spatial features (distance to line, corridor edge, tower proximity)
 - Temporal features (NDVI change, growth rate)
+- Land cover features (woody vs non-woody vegetation from WorldCover)
+- Canopy height features (from GEDI L2A)
+- Terrain features (slope, aspect from Copernicus DEM)
+- Weather context features (from NASA POWER)
 
 Outputs as pandas DataFrame → CSV/PostGIS table.
 
 Known Limitations:
 1. Features are at corridor-segment-level (10m resolution Sentinel-2 limitation).
-2. No canopy height data — vegetation condition proxy only.
-3. Land cover not integrated — cropland vs. woody vegetation not distinguished.
+2. GEDI is sparse (~25m footprint) — canopy height may be missing for many segments.
+3. WorldCover is 10m and static (2020/2021) — may not reflect current conditions.
+4. Weather data provides context for vegetation growth analysis.
+   Do NOT directly convert rainfall into risk score without validation.
 """
 
 import argparse
@@ -31,7 +37,7 @@ from tqdm import tqdm
 
 
 class FeatureEngineer:
-    """Combine vegetation, spatial, and temporal features into corridor-segment features."""
+    """Combine vegetation, spatial, temporal, and auxiliary data source features."""
 
     def __init__(
         self,
@@ -40,6 +46,10 @@ class FeatureEngineer:
         ndvi_early_path: Optional[str] = None,
         ndvi_late_path: Optional[str] = None,
         temporal_stats_path: Optional[str] = None,
+        worldcover_path: Optional[str] = None,
+        gedi_path: Optional[str] = None,
+        dem_path: Optional[str] = None,
+        weather_path: Optional[str] = None,
     ):
         """
         Initialize feature engineer.
@@ -50,12 +60,20 @@ class FeatureEngineer:
             ndvi_early_path: Path to early NDVI raster (optional)
             ndvi_late_path: Path to late NDVI raster (optional)
             temporal_stats_path: Path to temporal stats JSON (optional)
+            worldcover_path: Path to WorldCover tif (woody mask or classification) (optional)
+            gedi_path: Path to GEDI canopy height tif (optional)
+            dem_path: Path to Copernicus DEM tif (optional)
+            weather_path: Path to NASA POWER daily CSV (optional)
         """
         self.segments = gpd.read_file(corridor_segments_path)
         self.patches = gpd.read_file(vegetation_patches_path)
         self.ndvi_early_path = ndvi_early_path
         self.ndvi_late_path = ndvi_late_path
         self.temporal_stats_path = temporal_stats_path
+        self.worldcover_path = worldcover_path
+        self.gedi_path = gedi_path
+        self.dem_path = dem_path
+        self.weather_path = weather_path
 
         # Ensure same CRS
         if self.segments.crs != self.patches.crs:
@@ -66,6 +84,35 @@ class FeatureEngineer:
         if temporal_stats_path:
             with open(temporal_stats_path) as f:
                 self.temporal_stats = json.load(f)
+
+    def load_auxiliary_rasters(self) -> Dict[str, np.ndarray]:
+        """Load auxiliary rasters (WorldCover, GEDI, DEM) into memory."""
+        rasters = {}
+        if self.worldcover_path:
+            try:
+                with rasterio.open(self.worldcover_path) as src:
+                    rasters["worldcover"] = src.read(1)
+                print(f"  Loaded WorldCover: {self.worldcover_path}")
+            except Exception as e:
+                print(f"  WorldCover load failed: {e}")
+
+        if self.gedi_path:
+            try:
+                with rasterio.open(self.gedi_path) as src:
+                    rasters["gedi"] = src.read(1)
+                print(f"  Loaded GEDI: {self.gedi_path}")
+            except Exception as e:
+                print(f"  GEDI load failed: {e}")
+
+        if self.dem_path:
+            try:
+                with rasterio.open(self.dem_path) as src:
+                    rasters["dem"] = src.read(1)
+                print(f"  Loaded DEM: {self.dem_path}")
+            except Exception as e:
+                print(f"  DEM load failed: {e}")
+
+        return rasters
 
     def extract_ndvi_zonal_stats(
         self, ndvi_path: str, feature_name: str
@@ -118,6 +165,51 @@ class FeatureEngineer:
                     f"{feature_name}_ndvi_count": 0,
                 }
 
+        return result
+
+    def extract_auxiliary_zonal_stats(
+        self, raster: np.ndarray, transform, feature_prefix: str
+    ) -> Dict[int, Dict]:
+        """
+        Extract zonal statistics from auxiliary raster (WorldCover, GEDI, DEM) for each segment.
+
+        Args:
+            raster: 2D numpy array
+            transform: rasterio Affine transform
+            feature_prefix: prefix for feature names
+
+        Returns:
+            Dictionary mapping segment index to stats dict
+        """
+        segment_geoms = [geom for geom in self.segments.geometry]
+        stats = zonal_stats(
+            segment_geoms,
+            raster,
+            affine=transform,
+            stats=["mean", "std", "min", "max", "median", "count"],
+            nodata=np.nan,
+        )
+
+        result = {}
+        for i, s in enumerate(stats):
+            if s is not None:
+                result[i] = {
+                    f"{feature_prefix}_mean": s.get("mean", np.nan),
+                    f"{feature_prefix}_std": s.get("std", np.nan),
+                    f"{feature_prefix}_min": s.get("min", np.nan),
+                    f"{feature_prefix}_max": s.get("max", np.nan),
+                    f"{feature_prefix}_median": s.get("median", np.nan),
+                    f"{feature_prefix}_count": s.get("count", 0),
+                }
+            else:
+                result[i] = {
+                    f"{feature_prefix}_mean": np.nan,
+                    f"{feature_prefix}_std": np.nan,
+                    f"{feature_prefix}_min": np.nan,
+                    f"{feature_prefix}_max": np.nan,
+                    f"{feature_prefix}_median": np.nan,
+                    f"{feature_prefix}_count": 0,
+                }
         return result
 
     def compute_vegetation_fraction_per_segment(self) -> pd.DataFrame:
@@ -262,6 +354,65 @@ class FeatureEngineer:
 
         return df
 
+    def add_auxiliary_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Add features from auxiliary data sources (WorldCover, GEDI, DEM, Weather)."""
+        print("  Loading auxiliary rasters...")
+        rasters = self.load_auxiliary_rasters()
+
+        # WorldCover features
+        if "worldcover" in rasters:
+            print("  Adding WorldCover features...")
+            # Need to get transform from the raster
+            with rasterio.open(self.worldcover_path) as src:
+                wc_stats = self.extract_auxiliary_zonal_stats(
+                    rasters["worldcover"], src.transform, "worldcover"
+                )
+            for idx, stats in wc_stats.items():
+                if idx < len(df):
+                    for k, v in stats.items():
+                        df.loc[idx, k] = v
+
+        # GEDI canopy height features
+        if "gedi" in rasters:
+            print("  Adding GEDI canopy height features...")
+            with rasterio.open(self.gedi_path) as src:
+                gedi_stats = self.extract_auxiliary_zonal_stats(
+                    rasters["gedi"], src.transform, "gedi_canopy_height"
+                )
+            for idx, stats in gedi_stats.items():
+                if idx < len(df):
+                    for k, v in stats.items():
+                        df.loc[idx, k] = v
+
+        # DEM terrain features
+        if "dem" in rasters:
+            print("  Adding DEM terrain features...")
+            with rasterio.open(self.dem_path) as src:
+                dem_stats = self.extract_auxiliary_zonal_stats(
+                    rasters["dem"], src.transform, "dem_elevation"
+                )
+            for idx, stats in dem_stats.items():
+                if idx < len(df):
+                    for k, v in stats.items():
+                        df.loc[idx, k] = v
+
+        # Weather features (load from CSV summary)
+        if self.weather_path:
+            print("  Adding weather context features...")
+            try:
+                weather_df = pd.read_csv(self.weather_path)
+                if "date" in weather_df.columns:
+                    # Compute summary stats
+                    df["weather_total_precip_mm"] = weather_df["prectotcorr"].sum() if "prectotcorr" in weather_df.columns else 0
+                    df["weather_mean_temp_c"] = weather_df["t2m"].mean() if "t2m" in weather_df.columns else 0
+                    df["weather_mean_humidity_pct"] = weather_df["rh2m"].mean() if "rh2m" in weather_df.columns else 0
+                    df["weather_mean_wind_ms"] = weather_df["ws2m"].mean() if "ws2m" in weather_df.columns else 0
+                    df["weather_mean_solar_radiation"] = weather_df["allsky_sfc_sw_dwn"].mean() if "allsky_sfc_sw_dwn" in weather_df.columns else 0
+            except Exception as e:
+                print(f"  Weather feature extraction failed: {e}")
+
+        return df
+
     def build_feature_table(self) -> pd.DataFrame:
         """Build complete feature table."""
         print("Building vegetation features...")
@@ -272,6 +423,9 @@ class FeatureEngineer:
 
         print("Adding NDVI zonal features...")
         df = self.add_ndvi_zonal_features(df)
+
+        print("Adding auxiliary data source features...")
+        df = self.add_auxiliary_features(df)
 
         print("Adding spatial segment attributes...")
         # Add segment geometry attributes
@@ -332,6 +486,10 @@ def main():
     parser.add_argument("--ndvi-early", help="Path to early date NDVI raster (optional)")
     parser.add_argument("--ndvi-late", help="Path to late date NDVI raster (optional)")
     parser.add_argument("--temporal-stats", help="Path to temporal stats JSON (optional)")
+    parser.add_argument("--worldcover-path", help="Path to WorldCover raster (optional)")
+    parser.add_argument("--gedi-path", help="Path to GEDI canopy height raster (optional)")
+    parser.add_argument("--dem-path", help="Path to Copernicus DEM raster (optional)")
+    parser.add_argument("--weather-path", help="Path to NASA POWER daily CSV (optional)")
 
     args = parser.parse_args()
 
@@ -341,6 +499,10 @@ def main():
         ndvi_early_path=args.ndvi_early,
         ndvi_late_path=args.ndvi_late,
         temporal_stats_path=args.temporal_stats,
+        worldcover_path=args.worldcover_path,
+        gedi_path=args.gedi_path,
+        dem_path=args.dem_path,
+        weather_path=args.weather_path,
     )
 
     df = engineer.build_feature_table()

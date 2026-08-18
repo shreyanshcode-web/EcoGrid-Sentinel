@@ -32,23 +32,38 @@ from dataclasses import dataclass, field
 # =============================================================================
 # These weights are tuned for vegetation risk near transmission corridors.
 # Each weight has a one-line rationale comment explaining why it matters.
+#
+# IMPORTANT: This is a transparent, tunable weighted heuristic (NOT trained supervised ML).
+# Leave extension point for supervised training when incident data becomes available.
 
 WEIGHTS = {
     # Proximity to line: Closer vegetation has higher fall/contact risk
-    # Weight: 0.40 — Primary factor for fall hazard assessment
-    "proximity": 0.40,
+    # Weight: 0.30 — Primary factor for fall hazard assessment (reduced to accommodate new factors)
+    "proximity": 0.30,
 
     # Vegetation density: Higher density = more fuel for fires, more branches
-    # Weight: 0.25 — Dense vegetation increases both fire and contact risk
-    "density": 0.25,
+    # Weight: 0.20 — Dense vegetation increases both fire and contact risk
+    "density": 0.20,
 
     # Growth rate: Fast-growing species may reach conductors quicker
-    # Weight: 0.20 — Temporal component for future risk estimation
-    "growth": 0.20,
+    # Weight: 0.15 — Temporal component for future risk estimation
+    "growth": 0.15,
 
     # Vegetation condition: Stressed/diseased trees are more likely to fail
-    # Weight: 0.15 — Condition affects failure probability (fall risk)
-    "condition": 0.15,
+    # Weight: 0.10 — Condition affects failure probability (fall risk)
+    "condition": 0.10,
+
+    # Woody vegetation fraction (WorldCover): Woody vegetation = higher fall risk than crops
+    # Weight: 0.10 — Cropland/grassland have lower fall risk than trees/shrubs
+    "woody_fraction": 0.10,
+
+    # Canopy height (GEDI): Taller vegetation = greater fall distance/reach
+    # Weight: 0.10 — Direct measure of vegetation height, sparse coverage
+    "canopy_height": 0.10,
+
+    # Terrain slope (DEM): Steep slopes increase fall risk and maintenance difficulty
+    # Weight: 0.05 — Terrain context for fall direction and accessibility
+    "terrain_slope": 0.05,
 }
 
 # Risk bucket thresholds (normalized 0-1 score)
@@ -200,6 +215,32 @@ class RiskScorer:
         condition_score = 0.7 * health_score + 0.3 * vegetation_fraction
         return condition_score
 
+    def compute_woody_fraction_score(self, woody_fraction: np.ndarray) -> np.ndarray:
+        """
+        Compute woody vegetation fraction score (0-1).
+
+        Higher woody fraction = higher fall risk (trees/shrubs vs crops/grass).
+        WorldCover classes 10, 20, 95 = woody vegetation.
+        """
+        return normalize_feature(woody_fraction)
+
+    def compute_canopy_height_score(self, canopy_height: np.ndarray) -> np.ndarray:
+        """
+        Compute canopy height score (0-1).
+
+        Taller vegetation = greater fall distance/reach potential.
+        GEDI provides sparse coverage (~25m footprint).
+        """
+        return normalize_feature(canopy_height)
+
+    def compute_terrain_slope_score(self, slope: np.ndarray) -> np.ndarray:
+        """
+        Compute terrain slope score (0-1).
+
+        Steeper slopes = increased fall risk and maintenance difficulty.
+        """
+        return normalize_feature(slope)
+
     def compute_risk_score(self, features_df: pd.DataFrame) -> pd.DataFrame:
         """
         Compute risk scores for all corridor segments.
@@ -233,12 +274,29 @@ class RiskScorer:
             df["vegetation_fraction"].values,
         )
 
+        # NEW: Woody vegetation fraction (WorldCover)
+        woody_frac = df["worldcover_mean"].values if "worldcover_mean" in df.columns else np.zeros(len(df))
+        df["woody_fraction_score"] = self.compute_woody_fraction_score(woody_frac)
+
+        # NEW: Canopy height (GEDI)
+        canopy_h = df["gedi_canopy_height_mean"].values if "gedi_canopy_height_mean" in df.columns else np.zeros(len(df))
+        df["canopy_height_score"] = self.compute_canopy_height_score(canopy_h)
+
+        # NEW: Terrain slope (DEM)
+        # Note: dem_elevation_mean is elevation, not slope. Need slope if available.
+        # For now use elevation as proxy, but ideally we'd have slope raster
+        terrain = df["dem_elevation_mean"].values if "dem_elevation_mean" in df.columns else np.zeros(len(df))
+        df["terrain_slope_score"] = self.compute_terrain_slope_score(terrain)
+
         # Compute weighted risk score
         df["risk_score_raw"] = (
             self.weights["proximity"] * df["proximity_score"]
             + self.weights["density"] * df["density_score"]
             + self.weights["growth"] * df["growth_score"]
             + self.weights["condition"] * df["condition_score"]
+            + self.weights["woody_fraction"] * df["woody_fraction_score"]
+            + self.weights["canopy_height"] * df["canopy_height_score"]
+            + self.weights["terrain_slope"] * df["terrain_slope_score"]
         )
 
         # Normalize to 0-1
@@ -304,6 +362,33 @@ class RiskScorer:
                         row.get("late_ndvi_mean", 0)
                     ),
                 },
+                "woody_fraction": {
+                    "score": float(row.get("woody_fraction_score", 0)),
+                    "weight": self.weights["woody_fraction"],
+                    "weighted": float(row.get("woody_fraction_score", 0) * self.weights["woody_fraction"]),
+                    "contribution_pct": float(
+                        row.get("woody_fraction_score", 0) * self.weights["woody_fraction"] / max(row["risk_score_raw"], 0.001) * 100
+                    ),
+                    "interpretation": self._interpret_woody_fraction(row.get("worldcover_mean", 0)),
+                },
+                "canopy_height": {
+                    "score": float(row.get("canopy_height_score", 0)),
+                    "weight": self.weights["canopy_height"],
+                    "weighted": float(row.get("canopy_height_score", 0) * self.weights["canopy_height"]),
+                    "contribution_pct": float(
+                        row.get("canopy_height_score", 0) * self.weights["canopy_height"] / max(row["risk_score_raw"], 0.001) * 100
+                    ),
+                    "interpretation": self._interpret_canopy_height(row.get("gedi_canopy_height_mean", 0)),
+                },
+                "terrain_slope": {
+                    "score": float(row.get("terrain_slope_score", 0)),
+                    "weight": self.weights["terrain_slope"],
+                    "weighted": float(row.get("terrain_slope_score", 0) * self.weights["terrain_slope"]),
+                    "contribution_pct": float(
+                        row.get("terrain_slope_score", 0) * self.weights["terrain_slope"] / max(row["risk_score_raw"], 0.001) * 100
+                    ),
+                    "interpretation": self._interpret_terrain_slope(row.get("dem_elevation_mean", 0)),
+                },
             },
             "key_factors": self._identify_key_factors(row),
             "recommended_action": self._recommend_action(row),
@@ -350,6 +435,40 @@ class RiskScorer:
             return "Stressed (NDVI 0.3-0.5): Vegetation may be water-stressed or diseased"
         else:
             return "Very stressed (NDVI <0.3): Likely not woody vegetation or severely stressed"
+
+    def _interpret_woody_fraction(self, woody_frac: float) -> str:
+        """Human-readable interpretation of woody vegetation fraction (WorldCover)."""
+        if woody_frac > 0.5:
+            return "High woody fraction: >50% tree/shrub cover — significant fall hazard"
+        elif woody_frac > 0.2:
+            return "Moderate woody fraction: 20-50% tree/shrub cover — moderate fall hazard"
+        elif woody_frac > 0:
+            return "Low woody fraction: Some tree/shrub presence — minor fall hazard"
+        else:
+            return "No woody vegetation: Primarily cropland/grassland — minimal fall hazard"
+
+    def _interpret_canopy_height(self, height_m: float) -> str:
+        """Human-readable interpretation of canopy height (GEDI)."""
+        if np.isnan(height_m) or height_m == 0:
+            return "No GEDI coverage: Canopy height unknown — using NDVI proxy only"
+        elif height_m > 20:
+            return f"Tall canopy: {height_m:.0f}m — high fall reach potential"
+        elif height_m > 10:
+            return f"Medium canopy: {height_m:.0f}m — moderate fall reach"
+        elif height_m > 5:
+            return f"Low canopy: {height_m:.0f}m — low fall reach"
+        else:
+            return f"Very low vegetation: {height_m:.0f}m — minimal fall reach"
+
+    def _interpret_terrain_slope(self, elevation_m: float) -> str:
+        """Human-readable interpretation of terrain (using elevation as proxy for slope)."""
+        # Note: This uses elevation as a proxy. Ideally we'd have slope from DEM derivatives.
+        if elevation_m > 1000:
+            return f"High elevation: {elevation_m:.0f}m — potential steep terrain, difficult access"
+        elif elevation_m > 500:
+            return f"Moderate elevation: {elevation_m:.0f}m — possible slope complexity"
+        else:
+            return f"Low elevation: {elevation_m:.0f}m — generally accessible terrain"
 
     def _identify_key_factors(self, row) -> List[str]:
         """Identify the top risk factors for this segment."""

@@ -3,12 +3,19 @@
 Master Pipeline Orchestration Script
 
 Runs all stages in sequence:
-1. Sentinel-2 Ingestion (Stage 1)
-2. Vegetation Analysis (Stage 2)
-3. Spatial Analysis (Stage 3)
-4. Temporal Analysis (Stage 4) - if multi-date
-5. Feature Engineering (Stage 5)
-6. Risk Scoring (Stage 6)
+1a. Sentinel-2 Ingestion (Tier 1) - Copernicus Data Space STAC
+1b. ESA WorldCover Land Cover Ingestion (Tier 1) - woody vegetation mask
+1c. NASA GEDI Canopy Height Ingestion (Tier 2) - sparse, ~25m footprint
+1d. Copernicus DEM Ingestion (Tier 1) - terrain context, NOT canopy height
+1e. NASA POWER Weather/Climate Ingestion (Tier 2) - seasonal growth context
+2.  Vegetation Analysis - NDVI/vegetation fraction from Sentinel-2
+3.  Spatial Analysis - proximity features relative to transmission lines
+4.  Temporal Analysis - NDVI change detection (if multi-date)
+5.  Feature Engineering - per-corridor-segment feature table
+6.  Risk Scoring - weighted heuristic risk assessment
+
+IMPORTANT: This is a decision-support/inspection-prioritization system.
+It does NOT claim Sentinel-2 alone can determine tree-conductor contact.
 
 Usage:
     python pipeline.py --aoi aoi.geojson --start-date 2024-01-01 --end-date 2024-01-31 --output-dir ./data
@@ -110,6 +117,57 @@ class Pipeline:
         ]
         return self.run_command(cmd, "Sentinel-2 Ingestion (Stage 1)")
 
+    def stage1b_landcover(self) -> bool:
+        """Stage 1b: ESA WorldCover Land Cover Ingestion."""
+        cmd = [
+            sys.executable,
+            "src/ingestion/landcover_ingest.py",
+            "--aoi", self.aoi_geojson,
+            "--output-dir", str(self.output_dir / "ingestion"),
+            "--year", "2021",
+            "--target-crs", "EPSG:4326",
+        ]
+        return self.run_command(cmd, "WorldCover Land Cover Ingestion (Stage 1b)")
+
+    def stage1c_gedi(self) -> bool:
+        """Stage 1c: NASA GEDI Canopy Height Ingestion."""
+        # Use start_date year as GEDI year
+        year = self.start_date[:4]
+        cmd = [
+            sys.executable,
+            "src/ingestion/gedi_ingest.py",
+            "--aoi", self.aoi_geojson,
+            "--output-dir", str(self.output_dir / "ingestion"),
+            "--year", year,
+            "--target-crs", "EPSG:4326",
+        ]
+        return self.run_command(cmd, "GEDI Canopy Height Ingestion (Stage 1c)")
+
+    def stage1d_dem(self) -> bool:
+        """Stage 1d: Copernicus DEM Ingestion."""
+        cmd = [
+            sys.executable,
+            "src/ingestion/dem_ingest.py",
+            "--aoi", self.aoi_geojson,
+            "--output-dir", str(self.output_dir / "ingestion"),
+            "--resolution", "GLO-30",
+            "--target-crs", "EPSG:4326",
+        ]
+        return self.run_command(cmd, "Copernicus DEM Ingestion (Stage 1d)")
+
+    def stage1e_weather(self) -> bool:
+        """Stage 1e: NASA POWER Weather/Climate Ingestion."""
+        cmd = [
+            sys.executable,
+            "src/ingestion/weather_ingest.py",
+            "--aoi", self.aoi_geojson,
+            "--output-dir", str(self.output_dir / "ingestion"),
+            "--start-date", self.start_date,
+            "--end-date", self.end_date,
+            "--target-crs", "EPSG:4326",
+        ]
+        return self.run_command(cmd, "NASA POWER Weather Ingestion (Stage 1e)")
+
     def stage2_vegetation(self) -> bool:
         """Stage 2: Vegetation Analysis."""
         ingestion_dir = self.output_dir / "ingestion"
@@ -121,6 +179,12 @@ class Pipeline:
         if not meta_files:
             print("  No metadata files found from ingestion, skipping vegetation analysis")
             return False
+
+        # Find WorldCover woody mask
+        worldcover_files = list(ingestion_dir.glob("worldcover/woody_vegetation_combined.tif"))
+        if not worldcover_files:
+            worldcover_files = list(ingestion_dir.glob("worldcover/woody_vegetation_tile_*.tif"))
+        worldcover_path = str(worldcover_files[0]) if worldcover_files else None
 
         success_count = 0
         for meta_file in meta_files:
@@ -136,6 +200,8 @@ class Pipeline:
                 "--output-dir", str(output_dir),
                 "--ndvi-threshold", str(self.ndvi_threshold),
             ]
+            if worldcover_path:
+                cmd.extend(["--worldcover-path", worldcover_path])
             if self.run_command(cmd, f"Vegetation Analysis - {tile_id}"):
                 success_count += 1
 
@@ -225,8 +291,24 @@ class Pipeline:
         patches_path = veg_patch_files[0]
         output_dir = self.output_dir / "features"
 
-        temporal_stats = self.output_dir / "temporal" / "*_temporal_stats.json"
         temporal_files = list(self.output_dir.glob("temporal/*_temporal_stats.json"))
+
+        # Find auxiliary data sources
+        ingestion_dir = self.output_dir / "ingestion"
+
+        # WorldCover woody mask
+        worldcover_files = list(ingestion_dir.glob("worldcover/woody_vegetation_combined.tif"))
+        if not worldcover_files:
+            worldcover_files = list(ingestion_dir.glob("worldcover/woody_vegetation_tile_*.tif"))
+
+        # GEDI canopy height
+        gedi_files = list(ingestion_dir.glob("gedi/canopy_height.tif"))
+
+        # DEM elevation
+        dem_files = list(ingestion_dir.glob("dem/dem_GLO-30_tile_*.tif"))
+
+        # Weather daily CSV
+        weather_csv = ingestion_dir / "weather" / "nasa_power_daily.csv"
 
         cmd = [
             sys.executable,
@@ -237,6 +319,14 @@ class Pipeline:
         ]
         if temporal_files:
             cmd.extend(["--temporal-stats", str(temporal_files[0])])
+        if worldcover_files:
+            cmd.extend(["--worldcover-path", str(worldcover_files[0])])
+        if gedi_files:
+            cmd.extend(["--gedi-path", str(gedi_files[0])])
+        if dem_files:
+            cmd.extend(["--dem-path", str(dem_files[0])])
+        if weather_csv.exists():
+            cmd.extend(["--weather-path", str(weather_csv)])
 
         return self.run_command(cmd, "Feature Engineering (Stage 5)")
 
@@ -291,7 +381,11 @@ class Pipeline:
         print(f"{'#'*60}\n")
 
         stages = [
-            ("Stage 1: Ingestion", self.stage1_ingestion),
+            ("Stage 1: Sentinel-2 Ingestion", self.stage1_ingestion),
+            ("Stage 1b: WorldCover Land Cover", self.stage1b_landcover),
+            ("Stage 1c: GEDI Canopy Height", self.stage1c_gedi),
+            ("Stage 1d: Copernicus DEM", self.stage1d_dem),
+            ("Stage 1e: NASA POWER Weather", self.stage1e_weather),
             ("Stage 2: Vegetation Analysis", self.stage2_vegetation),
             ("Stage 3: Spatial Analysis", self.stage3_spatial),
         ]
