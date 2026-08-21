@@ -202,6 +202,252 @@ The output is segment-level inspection prioritization and is available through
 conductor contact. Sentinel-2 NDVI is a vegetation proxy, and the checked-in
 classifier is trained on weak inspection labels rather than outage ground truth.
 
+## Detailed Setup and Run Guide
+
+This section describes the recommended workflow from a fresh Windows checkout.
+Run all commands from the repository root (`SIH`). Keep the API and dashboard
+running in separate terminal windows.
+
+### 1. Check the required software
+
+Install the following before starting:
+
+- Python 3.10 or newer
+- Node.js 18 or newer and npm
+- Git, if cloning the repository
+- Internet access for Sentinel-2/WorldCover STAC downloads and map tiles
+
+Check the installed versions:
+
+```powershell
+python --version
+node --version
+npm --version
+```
+
+### 2. Create and activate the Python environment
+
+PowerShell commands:
+
+```powershell
+python -m venv .venv
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+```
+
+Install the Python packages:
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+The geospatial packages (`geopandas`, `rasterio`, `fiona`, `pyproj`, and
+`shapely`) must install successfully because the API, spatial analysis, and
+NDVI workflow use them. If a Python version does not have compatible wheels,
+use Python 3.11 or 3.12 and recreate `.venv` rather than mixing packages from
+different interpreters.
+
+### 3. Install the dashboard dependencies
+
+Open a second terminal at the repository root and run:
+
+```powershell
+Push-Location dashboard
+npm install
+Pop-Location
+```
+
+The dashboard is a React application using Leaflet. It reads API data when the
+API is available and falls back to the static files in
+`dashboard/public/data/` when it is not.
+
+### 4. Train the included India model
+
+The repository includes the SIH1379 labelled observations and the PM GatiShakti
+220 kV+ India transmission-line layer. Train the reproducible inspection-
+priority classifier with:
+
+```powershell
+python src/ml/train_india_model.py `
+  --dataset data/SIH1379_ML_Training_Dataset.csv `
+  --output-dir data/models
+```
+
+Expected outputs:
+
+- `data/models/india_risk_model.joblib`
+- `data/models/india_risk_model_metrics.json`
+
+The classifier predicts an inspection-priority label from distance, NDVI, and
+vegetation factors. It is not an outage predictor and should not be used for
+automatic switching or maintenance decisions.
+
+### 5. Start the FastAPI backend
+
+From the repository root, with `.venv` activated:
+
+```powershell
+python -m uvicorn src.api.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+Verify the backend in a browser:
+
+- API information: `http://127.0.0.1:8000/`
+- Swagger UI: `http://127.0.0.1:8000/docs`
+- Transmission lines: `http://127.0.0.1:8000/transmission-lines`
+- Risk summary: `http://127.0.0.1:8000/summary`
+- Model status: `http://127.0.0.1:8000/model/status`
+
+The backend expects to be started from the repository root because its default
+data paths are relative to `./data`.
+
+### 6. Start the dashboard
+
+In another terminal:
+
+```powershell
+Push-Location dashboard
+npm start
+```
+
+Open `http://localhost:3000`. The dashboard proxy forwards API requests to
+`http://localhost:8000` using the proxy setting in `dashboard/package.json`.
+
+If the Create React App development server fails during startup because of a
+webpack-dev-server `allowedHosts` error, build and serve the verified static
+bundle instead:
+
+```powershell
+Push-Location dashboard
+npm run build
+Pop-Location
+python -m http.server 3000 --directory dashboard/build
+```
+
+Then open `http://127.0.0.1:3000`. The static server does not provide the
+development proxy; use the API URL configuration appropriate for your deployed
+environment if live API data is required.
+
+### 7. Run the sample end-to-end pipeline
+
+Use a small AOI first. This downloads external imagery and may take time:
+
+```powershell
+python src/pipeline.py `
+  --aoi data/sample_aoi.geojson `
+  --start-date 2024-01-01 `
+  --end-date 2024-01-31 `
+  --output-dir data/output `
+  --transmission-lines data/sample_transmission_lines.geojson `
+  --tower-locations data/sample_towers.geojson
+```
+
+Pipeline results are written under `data/output/`. The final risk JSON and
+summary are copied to `data/` for API consumption. Check stage logs under
+`data/output/logs/` if a stage fails; optional data sources may fail while the
+core stages continue.
+
+### 8. Acquire India-wide NDVI on demand
+
+India-wide imagery is not stored in Git because of its size. The downloader
+uses manageable geographic cells and writes a resumable manifest:
+
+```powershell
+python src/ingestion/india_ndvi_ingest.py `
+  --start-date 2025-01-01 `
+  --end-date 2025-01-31 `
+  --output-dir data/india_ndvi `
+  --cell-size-degrees 2.5 `
+  --cloud-cover-max 20
+```
+
+The command searches Copernicus Sentinel-2 L2A scenes and stores downloaded
+bands below `data/india_ndvi/cells/`. Progress is recorded in
+`data/india_ndvi/india_ndvi_manifest.json`, so completed cells are skipped on
+the next run. This operation can require substantial storage, bandwidth, and
+time. It is better to begin with a larger cell size or a smaller date range.
+
+The existing vegetation stage computes NDVI from matching B04 (red) and B08
+(near-infrared) bands:
+
+```powershell
+python src/analysis/vegetation_analysis.py `
+  --tile-id <tile-id> `
+  --bands-dir data/india_ndvi/cells/<cell-id>/geotiffs `
+  --output-dir data/india_ndvi/vegetation `
+  --ndvi-threshold 0.3
+```
+
+Repeat this for the downloaded tiles, or automate it after confirming the
+manifest and tile naming for the selected date range.
+
+### 9. Score vegetation risk along the India line layer
+
+After creating an NDVI GeoTIFF covering the line network, run:
+
+```powershell
+python src/ml/corridor_risk_model.py `
+  --transmission-lines data/GatiShakti_Transmission_Lines_220kV_plus.geojson `
+  --ndvi-raster <path-to-ndvi-geotiff> `
+  --model data/models/india_risk_model.joblib `
+  --output data/india_corridor_risk.geojson `
+  --corridor-buffer-m 50 `
+  --segment-length-m 500 `
+  --ndvi-threshold 0.3
+```
+
+The output contains GeoJSON line segments with mean NDVI, vegetation fraction,
+sampled-pixel count, risk score, and Low/Medium/High category. The API serves
+it at `http://127.0.0.1:8000/india-corridor-risk` when the file exists.
+
+### 10. Run tests and basic checks
+
+With the Python environment activated:
+
+```powershell
+python -m pytest -q
+python -m py_compile src/api/main.py src/pipeline.py
+```
+
+Build the frontend before deployment:
+
+```powershell
+Push-Location dashboard
+npm run build
+Pop-Location
+```
+
+### Troubleshooting
+
+**`ModuleNotFoundError` for `geopandas`, `rasterio`, or another package**
+
+Confirm the virtual environment is active and install from the same
+interpreter:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+```
+
+If Fiona/GDAL cannot build on the selected Python version, recreate the
+environment with Python 3.11 or 3.12 and install again.
+
+**`npm start` says `package.json` cannot be found**
+
+Run it inside `dashboard`, not the repository root.
+
+**The dashboard shows fallback/demo data**
+
+Start the API on port 8000, confirm `/hotspots` and `/transmission-lines`
+respond, and reload the dashboard. If no generated risk file exists, the API
+uses the checked-in training observations as a first-run fallback.
+
+**No Sentinel-2 scenes are found**
+
+Expand the date range, increase `--cloud-cover-max`, verify the AOI CRS, and
+check internet/STAC access. Do not interpret missing imagery as zero vegetation.
+
 ---
 
 ## Project Structure
