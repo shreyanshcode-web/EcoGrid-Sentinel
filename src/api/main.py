@@ -54,6 +54,7 @@ TRAINING_DATASET_PATH = DATA_DIR / "SIH1379_ML_Training_Dataset.csv"
 TRANSMISSION_LINES_PATH = DATA_DIR / "GatiShakti_Transmission_Lines_220kV_plus.geojson"
 INDIA_MODEL_PATH = DATA_DIR / "models" / "india_risk_model.joblib"
 INDIA_MODEL_METRICS_PATH = DATA_DIR / "models" / "india_risk_model_metrics.json"
+INDIA_CORRIDOR_RISK_PATH = DATA_DIR / "india_corridor_risk.geojson"
 HOTSPOTS_GPKG_PATH = DATA_DIR / "corridor_segments.gpkg"
 NDVI_DIR = DATA_DIR / "ndvi"
 VEG_MASK_DIR = DATA_DIR / "vegetation_masks"
@@ -261,6 +262,7 @@ async def root():
             "/summary": "Risk summary statistics",
             "/model/status": "India-specific ML model metadata",
             "/model/predict": "India-specific ML risk-label prediction",
+            "/india-corridor-risk": "ML-scored NDVI risk along Indian transmission lines",
         },
     }
 
@@ -383,6 +385,15 @@ async def predict_india_risk(request: IndiaRiskPredictionRequest):
         "probabilities": {str(label): float(probability) for label, probability in zip(model.classes_, probabilities)},
         "model_scope": "SIH1379 Indian training dataset inspection-priority prototype",
     })
+
+
+@app.get("/india-corridor-risk")
+async def get_india_corridor_risk():
+    """Serve the optional all-India corridor ML inference GeoJSON."""
+    if not INDIA_CORRIDOR_RISK_PATH.exists():
+        raise HTTPException(status_code=404, detail="India corridor risk has not been generated yet")
+    with open(INDIA_CORRIDOR_RISK_PATH, encoding="utf-8") as f:
+        return JSONResponse(content=json.load(f))
 
 
 @app.get("/ndvi-layer")

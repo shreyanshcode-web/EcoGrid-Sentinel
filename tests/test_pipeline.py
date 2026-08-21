@@ -169,6 +169,26 @@ def test_feature_engineer_import():
     assert FeatureEngineer is not None
 
 
+def test_india_grid_is_resumable_and_covers_expected_bounds():
+    """India acquisition should create deterministic, manageable grid cells."""
+    from ingestion.india_ndvi_ingest import INDIA_BOUNDS, india_grid
+
+    cells = india_grid(10)
+    assert cells
+    assert cells[0]["cell_id"] == "india_00_00"
+    assert len({cell["cell_id"] for cell in cells}) == len(cells)
+    coordinates = cells[-1]["geometry"]["coordinates"][0]
+    assert coordinates[0][0] >= INDIA_BOUNDS[0]
+    assert coordinates[2][0] <= INDIA_BOUNDS[2]
+
+
+def test_corridor_risk_model_import():
+    """The additive India corridor scoring module remains importable."""
+    from ml.corridor_risk_model import score_corridors
+
+    assert score_corridors is not None
+
+
 # =============================================================================
 # Test API Models
 # =============================================================================

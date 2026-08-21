@@ -174,6 +174,34 @@ to the deployed FastAPI URL. The API exposes `/hotspots`, `/summary`,
 > has only five examples, so its output is appropriate for prototype inspection
 > prioritization, not autonomous operational decisions.
 
+### India-wide NDVI and corridor ML scoring
+
+India-wide Sentinel-2 imagery is acquired on demand; it is not bundled in this
+repository because the coverage is large. The resumable grid downloader records
+successful and failed cells in `india_ndvi_manifest.json`:
+
+```bash
+python src/ingestion/india_ndvi_ingest.py \
+  --start-date 2025-01-01 --end-date 2025-01-31 \
+  --output-dir data/india_ndvi --cell-size-degrees 2.5
+```
+
+Run the existing vegetation analysis for each downloaded B04/B08 pair to create
+NDVI GeoTIFFs, then score the line corridors with the trained India model:
+
+```bash
+python src/ml/corridor_risk_model.py \
+  --transmission-lines data/GatiShakti_Transmission_Lines_220kV_plus.geojson \
+  --ndvi-raster data/india_ndvi/ndvi/india_latest_ndvi.tif \
+  --model data/models/india_risk_model.joblib \
+  --output data/india_corridor_risk.geojson
+```
+
+The output is segment-level inspection prioritization and is available through
+`GET /india-corridor-risk`. It does not identify individual trees or prove
+conductor contact. Sentinel-2 NDVI is a vegetation proxy, and the checked-in
+classifier is trained on weak inspection labels rather than outage ground truth.
+
 ---
 
 ## Project Structure
