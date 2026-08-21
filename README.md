@@ -10,11 +10,30 @@
 [![License](https://img.shields.io/badge/license-MIT-lightgrey)](#-license)
 [![Made for](https://img.shields.io/badge/SIH-1379-red)](#)
 
+![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
+![React](https://img.shields.io/badge/React-61DAFB?logo=react&logoColor=black)
+![Node.js](https://img.shields.io/badge/Node.js-339933?logo=node.js&logoColor=white)
+![Leaflet](https://img.shields.io/badge/Leaflet-199900?logo=leaflet&logoColor=white)
+![GeoPandas](https://img.shields.io/badge/GeoPandas-0F766E?logoColor=white)
+![Rasterio](https://img.shields.io/badge/Rasterio-6D28D9?logoColor=white)
+![Shapely](https://img.shields.io/badge/Shapely-15803D?logoColor=white)
+![Sentinel-2](https://img.shields.io/badge/Sentinel--2-Copernicus-0B3D91)
+
 Ingests Sentinel-2 imagery + transmission infrastructure geometry → computes vegetation risk near power line corridors → serves it via **API + interactive dashboard**.
 
-> ⚠️ **Hackathon-grade prototype — not production-ready.** See [Known Limitations](#-known-limitations).
+| 🧩 **8** | 🗺️ **379** | 🏷️ **1,659** | 🔬 **10 m** |
+|:---:|:---:|:---:|:---:|
+| Pipeline Stages | Transmission Lines (India, 220 kV+) | Labeled Observations | Sentinel-2 Resolution |
+
+**🔗 Jump to:** [🚀 Quick Start](#-quick-start) · [🇮🇳 India Demo](#-india-data-prototype-deployment-ready-demo) · [🔌 API](#-api-endpoints) · [⚠️ Limitations](#-known-limitations) · [🗂 Data Sources](#-data-sources)
 
 </div>
+
+---
+
+> [!WARNING]
+> **Hackathon-grade prototype — not production-ready.** See [Known Limitations](#-known-limitations) for the documented gaps — resolution, ground truth, and auth — before relying on this for real operational decisions.
 
 ---
 
@@ -50,47 +69,39 @@ A single pipeline flows from raw satellite imagery to a scored, explainable dash
 | 7️⃣ | **API Layer** *(FastAPI)* | `/hotspots` → GeoJSON · `/hotspots/{id}` → full detail · `/ndvi-layer` → tiles · no auth (demo) |
 | 8️⃣ | **Dashboard** *(React + Leaflet)* | Color-coded risk map · side panel with score breakdown & NDVI · sortable top-priorities table |
 
-<details>
-<summary><b>🔽 Click to expand: raw pipeline flow diagram</b></summary>
+Visually, the pipeline flows like this — solid arrows always run, the dashed edge is the shortcut taken when temporal analysis is skipped:
 
-```
-Sentinel-2 (Planetary Computer STAC)
-    │
-    ▼
-┌─────────────────────────────────────────┐
-│ Stage 1 → Ingestion                     │
-└─────────────────────────────────────────┘
-    │ ▼
-┌─────────────────────────────────────────┐
-│ Stage 2 → Vegetation Analysis (NDVI)    │
-└─────────────────────────────────────────┘
-    │ ▼
-┌─────────────────────────────────────────┐
-│ Stage 3 → Spatial Analysis              │
-└─────────────────────────────────────────┘
-    │ ▼ (optional)
-┌─────────────────────────────────────────┐
-│ Stage 4 → Temporal Analysis             │
-└─────────────────────────────────────────┘
-    │ ▼
-┌─────────────────────────────────────────┐
-│ Stage 5 → Feature Engineering           │
-└─────────────────────────────────────────┘
-    │ ▼
-┌─────────────────────────────────────────┐
-│ Stage 6 → Risk Scoring (Heuristic v1)   │
-└─────────────────────────────────────────┘
-    │ ▼
-┌─────────────────────────────────────────┐
-│ Stage 7 → API Layer (FastAPI)           │
-└─────────────────────────────────────────┘
-    │ ▼
-┌─────────────────────────────────────────┐
-│ Stage 8 → Dashboard (React + Leaflet)   │
-└─────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    S0(["🛰️ Sentinel-2 Imagery<br/>Planetary Computer STAC"])
+    S1["1️⃣ Data Ingestion<br/>Search • Cloud filter • Download bands • Reproject"]
+    S2["2️⃣ Vegetation Analysis<br/>NDVI • Threshold mask • Denoising"]
+    S3["3️⃣ Spatial Analysis<br/>Distance to lines/towers • STRtree index"]
+    S4["4️⃣ Temporal Analysis (optional)<br/>NDVI change • Growth rate"]
+    S5["5️⃣ Feature Engineering<br/>Per-segment feature table"]
+    S6["6️⃣ Risk Scoring<br/>Weighted heuristic → Low / Med / High"]
+    S7["7️⃣ API Layer<br/>FastAPI · /hotspots · /summary"]
+    S8["8️⃣ Dashboard<br/>React + Leaflet"]
+
+    S0 --> S1 --> S2 --> S3
+    S3 --> S4 --> S5
+    S3 -. skip .-> S5
+    S5 --> S6 --> S7 --> S8
+
+    classDef ingest fill:#dbeafe,stroke:#2563eb,color:#1e3a8a;
+    classDef analyze fill:#dcfce7,stroke:#16a34a,color:#14532d;
+    classDef optional fill:#dcfce7,stroke:#16a34a,color:#14532d,stroke-dasharray: 5 5;
+    classDef score fill:#fef3c7,stroke:#d97706,color:#78350f;
+    classDef serve fill:#ede9fe,stroke:#7c3aed,color:#4c1d95;
+
+    class S1 ingest
+    class S2,S3,S5 analyze
+    class S4 optional
+    class S6 score
+    class S7,S8 serve
 ```
 
-</details>
+*Blue = ingestion · Green = analysis (dashed = optional) · Amber = scoring · Purple = serving*
 
 ---
 
@@ -189,7 +200,8 @@ cd dashboard && npm run build
 
 Deploy `dashboard/build` as a static site and point its API proxy/base URL at the deployed FastAPI instance. The API exposes `/hotspots`, `/summary`, `/model/status`, and `/model/predict`.
 
-> ⚠️ **Model caveat:** trained on the supplied SIH1379 labels, whose rare high-risk class has only **five** examples. Suitable for prototype inspection prioritization — **not** autonomous operational decisions.
+> [!WARNING]
+> **Model caveat:** trained on the supplied SIH1379 labels, whose rare high-risk class has only **five** examples. Suitable for prototype inspection prioritization — **not** autonomous operational decisions.
 
 ---
 
@@ -215,7 +227,8 @@ python src/ml/corridor_risk_model.py \
 
 Results are served at **`GET /india-corridor-risk`**.
 
-> ℹ️ This is **segment-level inspection prioritization** — it does not identify individual trees or prove conductor contact. Sentinel-2 NDVI is a vegetation proxy, and the classifier is trained on weak inspection labels rather than outage ground truth.
+> [!NOTE]
+> This is **segment-level inspection prioritization** — it does not identify individual trees or prove conductor contact. Sentinel-2 NDVI is a vegetation proxy, and the classifier is trained on weak inspection labels rather than outage ground truth.
 
 ---
 
@@ -249,7 +262,8 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-> The geospatial packages (`geopandas`, `rasterio`, `fiona`, `pyproj`, `shapely`) **must** install successfully — the API, spatial analysis, and NDVI workflow all depend on them. If wheels aren't available for your Python version, switch to 3.11/3.12 and recreate `.venv` rather than mixing interpreters.
+> [!IMPORTANT]
+> The geospatial packages (`geopandas`, `rasterio`, `fiona`, `pyproj`, `shapely`) must install successfully — the API, spatial analysis, and NDVI workflow all depend on them. If wheels aren't available for your Python version, switch to 3.11/3.12 and recreate `.venv` rather than mixing interpreters.
 
 ### 3. Install dashboard dependencies
 
@@ -271,6 +285,7 @@ python src/ml/train_india_model.py `
 
 **Expected outputs:** `data/models/india_risk_model.joblib`, `data/models/india_risk_model_metrics.json`
 
+> [!IMPORTANT]
 > This classifier predicts an inspection-priority label from distance, NDVI, and vegetation factors. It is **not** an outage predictor and should not drive automatic switching or maintenance decisions.
 
 ### 5. Start the FastAPI backend
@@ -287,6 +302,7 @@ python -m uvicorn src.api.main:app --host 127.0.0.1 --port 8000 --reload
 | Risk summary | `http://127.0.0.1:8000/summary` |
 | Model status | `http://127.0.0.1:8000/model/status` |
 
+> [!NOTE]
 > Start this from the repository root — data paths are relative to `./data`.
 
 ### 6. Start the dashboard
@@ -469,6 +485,27 @@ THRESHOLDS = {"high": 0.7, "medium": 0.4}
 
 ## 🔌 API Endpoints
 
+At runtime, the dashboard talks to the API over REST; the API reads from the generated risk files and the trained model:
+
+```mermaid
+flowchart LR
+    U(["👤 User"]) --> D["React Dashboard<br/>Leaflet map + priority table"]
+    D -->|GET requests| A["FastAPI Backend<br/>/hotspots · /summary · /model/predict"]
+    A -->|JSON responses| D
+    A --> G[("Risk GeoJSON<br/>+ Feature Tables")]
+    A --> M[("india_risk_model.joblib")]
+
+    classDef client fill:#ede9fe,stroke:#7c3aed,color:#4c1d95;
+    classDef server fill:#dbeafe,stroke:#2563eb,color:#1e3a8a;
+    classDef store fill:#fef3c7,stroke:#d97706,color:#78350f;
+
+    class D client
+    class A server
+    class G,M store
+```
+
+*Purple = client · Blue = backend · Amber = stored artifacts*
+
 | Method | Endpoint | Description |
 |---|---|---|
 | `GET` | `/` | API info |
@@ -510,14 +547,19 @@ THRESHOLDS = {"high": 0.7, "medium": 0.4}
 
 ## 🔮 Future Work (v2+)
 
+**Perception & Modeling**
 - [ ] **U-Net segmentation** for vegetation (replace threshold)
 - [ ] **LiDAR canopy height** integration
 - [ ] **Supervised risk model** with outage incident labels
+- [ ] **LSTM/Transformer** for growth forecasting
+
+**Data & Analysis**
 - [ ] **Land cover classification** (ESA WorldCover / Dynamic World)
 - [ ] **Rolling temporal stats** & seasonal trend modeling
-- [ ] **Auth / RBAC** on API
+
+**Platform & Ops**
+- [ ] **Auth/RBAC** on API
 - [ ] **PostGIS backend** for production-scale queries
-- [ ] **LSTM / Transformer** for growth forecasting
 
 ---
 
