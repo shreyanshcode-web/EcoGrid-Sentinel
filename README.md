@@ -1,99 +1,108 @@
-# SIH1379 — AI-Powered Transmission Corridor Vegetation Risk Intelligence System
+<div align="center">
 
-A prototype system that ingests Sentinel-2 imagery + transmission infrastructure geometry, computes vegetation risk near power line corridors, and serves it via API + dashboard.
+# 🌿⚡ SIH1379 — Transmission Corridor Vegetation Risk Intelligence
 
-> **Status**: Hackathon-grade prototype (not production-ready). See [Known Limitations](#known-limitations) below.
+**AI-powered vegetation risk detection for power line corridors, built on Sentinel-2 imagery**
+
+[![Status](https://img.shields.io/badge/status-hackathon--prototype-orange)](#-known-limitations)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](#prerequisites)
+[![Node](https://img.shields.io/badge/node-18%2B-green)](#prerequisites)
+[![License](https://img.shields.io/badge/license-MIT-lightgrey)](#-license)
+[![Made for](https://img.shields.io/badge/SIH-1379-red)](#)
+
+Ingests Sentinel-2 imagery + transmission infrastructure geometry → computes vegetation risk near power line corridors → serves it via **API + interactive dashboard**.
+
+> ⚠️ **Hackathon-grade prototype — not production-ready.** See [Known Limitations](#-known-limitations).
+
+</div>
 
 ---
 
-## Architecture Overview
+## 📑 Table of Contents
+
+- [Architecture Overview](#-architecture-overview)
+- [Quick Start](#-quick-start)
+- [India Data Prototype](#-india-data-prototype-deployment-ready-demo)
+- [India-Wide NDVI & Corridor ML Scoring](#-india-wide-ndvi-and-corridor-ml-scoring)
+- [Detailed Setup Guide (Windows)](#-detailed-setup-and-run-guide)
+- [Project Structure](#-project-structure)
+- [Known Limitations](#-known-limitations)
+- [Configuration](#-configuration)
+- [API Endpoints](#-api-endpoints)
+- [Future Work](#-future-work-v2)
+- [Data Sources](#-data-sources)
+- [License](#-license)
+
+---
+
+## 🏗 Architecture Overview
+
+A single pipeline flows from raw satellite imagery to a scored, explainable dashboard in eight stages:
+
+| Stage | Name | What Happens |
+|:---:|---|---|
+| 1️⃣ | **Data Ingestion** | Search Sentinel-2 L2A by AOI + date range · scene-level cloud filtering · download B2/B3/B4/B8/SCL bands · clip & reproject to EPSG:4326 |
+| 2️⃣ | **Vegetation Analysis** | Compute NDVI `(B8−B4)/(B8+B4)` · threshold mask (default `0.3`) · morphological denoising · U-Net stub reserved for v2 |
+| 3️⃣ | **Spatial Analysis** | Load transmission lines & towers · distance to nearest line segment / corridor edge · tower proximity · STRtree spatial index for speed |
+| 4️⃣ | **Temporal Analysis** *(optional)* | NDVI change between two dates · linear growth rate (% change / day) · seasonal trends reserved for v2 |
+| 5️⃣ | **Feature Engineering** | Per-corridor-segment feature table · vegetation fraction & mean NDVI · spatial + temporal features → CSV + GeoPackage |
+| 6️⃣ | **Risk Scoring** *(heuristic v1)* | Weighted sum of proximity, density, growth & condition · normalized 0–1 · bucketed Low / Medium / High · explainable breakdown |
+| 7️⃣ | **API Layer** *(FastAPI)* | `/hotspots` → GeoJSON · `/hotspots/{id}` → full detail · `/ndvi-layer` → tiles · no auth (demo) |
+| 8️⃣ | **Dashboard** *(React + Leaflet)* | Color-coded risk map · side panel with score breakdown & NDVI · sortable top-priorities table |
+
+<details>
+<summary><b>🔽 Click to expand: raw pipeline flow diagram</b></summary>
 
 ```
 Sentinel-2 (Planetary Computer STAC)
     │
     ▼
 ┌─────────────────────────────────────────┐
-│ Stage 1: Data Ingestion                 │
-│ - Search S2 L2A by AOI + date range     │
-│ - Cloud filtering (scene-level)         │
-│ - Download B2,B3,B4,B8,SCL bands        │
-│ - Clip to AOI, reproject to EPSG:4326   │
+│ Stage 1 → Ingestion                     │
 └─────────────────────────────────────────┘
-    │
-    ▼
+    │ ▼
 ┌─────────────────────────────────────────┐
-│ Stage 2: Vegetation Analysis            │
-│ - NDVI = (B8-B4)/(B8+B4)                │
-│ - Threshold mask (default 0.3)          │
-│ - Morphological open/close denoising    │
-│ - U-Net stub for v2                     │
+│ Stage 2 → Vegetation Analysis (NDVI)    │
 └─────────────────────────────────────────┘
-    │
-    ▼
+    │ ▼
 ┌─────────────────────────────────────────┐
-│ Stage 3: Spatial Analysis               │
-│ - Load transmission lines + towers      │
-│ - Distance to nearest line segment      │
-│ - Distance to corridor edge             │
-│ - Tower proximity / inside corridor     │
-│ - STRtree spatial index for performance │
+│ Stage 3 → Spatial Analysis              │
 └─────────────────────────────────────────┘
-    │
-    ▼ (optional)
+    │ ▼ (optional)
 ┌─────────────────────────────────────────┐
-│ Stage 4: Temporal Analysis              │
-│ - NDVI change between two dates         │
-│ - Linear growth rate (% change / days)  │
-│ - Rolling/seasonal trends → v2          │
+│ Stage 4 → Temporal Analysis             │
 └─────────────────────────────────────────┘
-    │
-    ▼
+    │ ▼
 ┌─────────────────────────────────────────┐
-│ Stage 5: Feature Engineering            │
-│ - Per-corridor-segment feature table    │
-│ - Vegetation fraction, mean NDVI        │
-│ - Spatial + temporal features           │
-│ - Output: CSV + GeoPackage              │
+│ Stage 5 → Feature Engineering           │
 └─────────────────────────────────────────┘
-    │
-    ▼
+    │ ▼
 ┌─────────────────────────────────────────┐
-│ Stage 6: Risk Scoring (Heuristic v1)    │
-│ - Weighted sum:                         │
-│   risk = w1*proximity + w2*density      │
-│        + w3*growth + w4*condition       │
-│ - Normalized 0-1, bucketed Low/Med/High │
-│ - Explainable breakdown per component   │
-│ - Supervised ML extension point         │
+│ Stage 6 → Risk Scoring (Heuristic v1)   │
 └─────────────────────────────────────────┘
-    │
-    ▼
+    │ ▼
 ┌─────────────────────────────────────────┐
-│ Stage 7: API Layer (FastAPI)            │
-│ - GET /hotspots → GeoJSON               │
-│ - GET /hotspots/{id} → full detail      │
-│ - GET /ndvi-layer → tiles               │
-│ - No auth (hackathon demo)              │
+│ Stage 7 → API Layer (FastAPI)           │
 └─────────────────────────────────────────┘
-    │
-    ▼
+    │ ▼
 ┌─────────────────────────────────────────┐
-│ Stage 8: Dashboard (React + Leaflet)    │
-│ - Map with color-coded risk markers     │
-│ - Side panel: score breakdown, NDVI     │
-│ - Sortable top-priorities table         │
+│ Stage 8 → Dashboard (React + Leaflet)   │
 └─────────────────────────────────────────┘
 ```
 
+</details>
+
 ---
 
-## Quick Start
+## 🚀 Quick Start
 
 ### Prerequisites
 
-- Python 3.10+
-- Node.js 18+ (for dashboard)
-- Planetary Computer access (free, no auth for STAC search)
+| Requirement | Version | Notes |
+|---|---|---|
+| Python | 3.10+ | Core pipeline & API |
+| Node.js | 18+ | Dashboard build |
+| Planetary Computer access | — | Free, no auth needed for STAC search |
 
 ### Installation
 
@@ -105,7 +114,7 @@ pip install -r requirements.txt
 cd dashboard && npm install && cd ..
 ```
 
-### Run Pipeline
+### Run the Pipeline
 
 ```bash
 # Full pipeline (ingestion → risk scoring)
@@ -116,8 +125,12 @@ python src/pipeline.py \
   --output-dir ./data/output \
   --transmission-lines data/sample_transmission_lines.geojson \
   --tower-locations data/sample_towers.geojson
+```
 
-# With temporal analysis (needs multi-date imagery)
+<details>
+<summary>Run with temporal analysis (needs multi-date imagery)</summary>
+
+```bash
 python src/pipeline.py \
   --aoi data/sample_aoi.geojson \
   --start-date 2024-01-01 \
@@ -128,28 +141,34 @@ python src/pipeline.py \
   --days-between 30
 ```
 
-### Run API Server
+</details>
+
+### Run the API Server
 
 ```bash
-# After pipeline completes, results copied to ./data/
+# After the pipeline completes, results are copied to ./data/
 uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### Run Dashboard
+### Run the Dashboard
 
 ```bash
 cd dashboard && npm start
-# Opens http://localhost:3000
+# → http://localhost:3000
 ```
 
-### India data prototype (deployment-ready demo)
+---
 
-The checked-in `data/` directory is the prototype's data source:
+## 🇮🇳 India Data Prototype (deployment-ready demo)
 
-- `GatiShakti_Transmission_Lines_220kV_plus.geojson` — 379 Indian 220 kV+ line features.
-- `SIH1379_ML_Training_Dataset.csv` — 1,659 labelled Indian observations used by the API and ML training.
+The checked-in `data/` directory ships with a ready-to-use India dataset:
 
-Train the reproducible India-specific inspection-priority classifier:
+| File | Contents |
+|---|---|
+| `GatiShakti_Transmission_Lines_220kV_plus.geojson` | 379 Indian 220 kV+ transmission-line features |
+| `SIH1379_ML_Training_Dataset.csv` | 1,659 labelled Indian observations used for API + ML training |
+
+**1. Train the India-specific inspection-priority classifier:**
 
 ```bash
 python src/ml/train_india_model.py \
@@ -157,28 +176,26 @@ python src/ml/train_india_model.py \
   --output-dir data/models
 ```
 
-This writes `data/models/india_risk_model.joblib` and a held-out evaluation
-report at `data/models/india_risk_model_metrics.json`. Start the API and build
-the dashboard for deployment:
+This produces:
+- `data/models/india_risk_model.joblib`
+- `data/models/india_risk_model_metrics.json` (held-out evaluation report)
+
+**2. Start the API and build the dashboard for deployment:**
 
 ```bash
 python -m uvicorn src.api.main:app --host 0.0.0.0 --port 8000
 cd dashboard && npm run build
 ```
 
-Deploy `dashboard/build` as a static site and configure its API proxy/base URL
-to the deployed FastAPI URL. The API exposes `/hotspots`, `/summary`,
-`/model/status`, and `/model/predict`.
+Deploy `dashboard/build` as a static site and point its API proxy/base URL at the deployed FastAPI instance. The API exposes `/hotspots`, `/summary`, `/model/status`, and `/model/predict`.
 
-> The model is trained on the supplied SIH1379 labels. Its rare high-risk class
-> has only five examples, so its output is appropriate for prototype inspection
-> prioritization, not autonomous operational decisions.
+> ⚠️ **Model caveat:** trained on the supplied SIH1379 labels, whose rare high-risk class has only **five** examples. Suitable for prototype inspection prioritization — **not** autonomous operational decisions.
 
-### India-wide NDVI and corridor ML scoring
+---
 
-India-wide Sentinel-2 imagery is acquired on demand; it is not bundled in this
-repository because the coverage is large. The resumable grid downloader records
-successful and failed cells in `india_ndvi_manifest.json`:
+## 🛰 India-Wide NDVI and Corridor ML Scoring
+
+India-wide Sentinel-2 imagery is acquired **on demand** (not bundled — coverage is large). The resumable grid downloader tracks progress in `india_ndvi_manifest.json`:
 
 ```bash
 python src/ingestion/india_ndvi_ingest.py \
@@ -186,8 +203,7 @@ python src/ingestion/india_ndvi_ingest.py \
   --output-dir data/india_ndvi --cell-size-degrees 2.5
 ```
 
-Run the existing vegetation analysis for each downloaded B04/B08 pair to create
-NDVI GeoTIFFs, then score the line corridors with the trained India model:
+Then run vegetation analysis on each downloaded B04/B08 pair and score the line corridors:
 
 ```bash
 python src/ml/corridor_risk_model.py \
@@ -197,27 +213,25 @@ python src/ml/corridor_risk_model.py \
   --output data/india_corridor_risk.geojson
 ```
 
-The output is segment-level inspection prioritization and is available through
-`GET /india-corridor-risk`. It does not identify individual trees or prove
-conductor contact. Sentinel-2 NDVI is a vegetation proxy, and the checked-in
-classifier is trained on weak inspection labels rather than outage ground truth.
+Results are served at **`GET /india-corridor-risk`**.
 
-## Detailed Setup and Run Guide
+> ℹ️ This is **segment-level inspection prioritization** — it does not identify individual trees or prove conductor contact. Sentinel-2 NDVI is a vegetation proxy, and the classifier is trained on weak inspection labels rather than outage ground truth.
 
-This section describes the recommended workflow from a fresh Windows checkout.
-Run all commands from the repository root (`SIH`). Keep the API and dashboard
-running in separate terminal windows.
+---
 
-### 1. Check the required software
+## 🪟 Detailed Setup and Run Guide
 
-Install the following before starting:
+<details>
+<summary><b>Full Windows / PowerShell walkthrough — click to expand</b></summary>
 
-- Python 3.10 or newer
-- Node.js 18 or newer and npm
-- Git, if cloning the repository
-- Internet access for Sentinel-2/WorldCover STAC downloads and map tiles
+Run all commands from the repository root (`SIH`). Keep the API and dashboard running in separate terminal windows.
 
-Check the installed versions:
+### 1. Check required software
+
+- Python 3.10+
+- Node.js 18+ and npm
+- Git (if cloning)
+- Internet access for Sentinel-2 / WorldCover STAC downloads and map tiles
 
 ```powershell
 python --version
@@ -227,30 +241,17 @@ npm --version
 
 ### 2. Create and activate the Python environment
 
-PowerShell commands:
-
 ```powershell
 python -m venv .venv
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-```
-
-Install the Python packages:
-
-```powershell
 python -m pip install -r requirements.txt
 ```
 
-The geospatial packages (`geopandas`, `rasterio`, `fiona`, `pyproj`, and
-`shapely`) must install successfully because the API, spatial analysis, and
-NDVI workflow use them. If a Python version does not have compatible wheels,
-use Python 3.11 or 3.12 and recreate `.venv` rather than mixing packages from
-different interpreters.
+> The geospatial packages (`geopandas`, `rasterio`, `fiona`, `pyproj`, `shapely`) **must** install successfully — the API, spatial analysis, and NDVI workflow all depend on them. If wheels aren't available for your Python version, switch to 3.11/3.12 and recreate `.venv` rather than mixing interpreters.
 
-### 3. Install the dashboard dependencies
-
-Open a second terminal at the repository root and run:
+### 3. Install dashboard dependencies
 
 ```powershell
 Push-Location dashboard
@@ -258,15 +259,9 @@ npm install
 Pop-Location
 ```
 
-The dashboard is a React application using Leaflet. It reads API data when the
-API is available and falls back to the static files in
-`dashboard/public/data/` when it is not.
+The dashboard (React + Leaflet) reads live API data when available and falls back to static files in `dashboard/public/data/` otherwise.
 
 ### 4. Train the included India model
-
-The repository includes the SIH1379 labelled observations and the PM GatiShakti
-220 kV+ India transmission-line layer. Train the reproducible inspection-
-priority classifier with:
 
 ```powershell
 python src/ml/train_india_model.py `
@@ -274,49 +269,36 @@ python src/ml/train_india_model.py `
   --output-dir data/models
 ```
 
-Expected outputs:
+**Expected outputs:** `data/models/india_risk_model.joblib`, `data/models/india_risk_model_metrics.json`
 
-- `data/models/india_risk_model.joblib`
-- `data/models/india_risk_model_metrics.json`
-
-The classifier predicts an inspection-priority label from distance, NDVI, and
-vegetation factors. It is not an outage predictor and should not be used for
-automatic switching or maintenance decisions.
+> This classifier predicts an inspection-priority label from distance, NDVI, and vegetation factors. It is **not** an outage predictor and should not drive automatic switching or maintenance decisions.
 
 ### 5. Start the FastAPI backend
-
-From the repository root, with `.venv` activated:
 
 ```powershell
 python -m uvicorn src.api.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-Verify the backend in a browser:
+| Check | URL |
+|---|---|
+| API info | `http://127.0.0.1:8000/` |
+| Swagger UI | `http://127.0.0.1:8000/docs` |
+| Transmission lines | `http://127.0.0.1:8000/transmission-lines` |
+| Risk summary | `http://127.0.0.1:8000/summary` |
+| Model status | `http://127.0.0.1:8000/model/status` |
 
-- API information: `http://127.0.0.1:8000/`
-- Swagger UI: `http://127.0.0.1:8000/docs`
-- Transmission lines: `http://127.0.0.1:8000/transmission-lines`
-- Risk summary: `http://127.0.0.1:8000/summary`
-- Model status: `http://127.0.0.1:8000/model/status`
-
-The backend expects to be started from the repository root because its default
-data paths are relative to `./data`.
+> Start this from the repository root — data paths are relative to `./data`.
 
 ### 6. Start the dashboard
-
-In another terminal:
 
 ```powershell
 Push-Location dashboard
 npm start
 ```
 
-Open `http://localhost:3000`. The dashboard proxy forwards API requests to
-`http://localhost:8000` using the proxy setting in `dashboard/package.json`.
+Open `http://localhost:3000`. The dashboard proxy forwards API requests to `http://localhost:8000` (see `dashboard/package.json`).
 
-If the Create React App development server fails during startup because of a
-webpack-dev-server `allowedHosts` error, build and serve the verified static
-bundle instead:
+**If `npm start` fails with a webpack-dev-server `allowedHosts` error**, build and serve the static bundle instead:
 
 ```powershell
 Push-Location dashboard
@@ -325,13 +307,9 @@ Pop-Location
 python -m http.server 3000 --directory dashboard/build
 ```
 
-Then open `http://127.0.0.1:3000`. The static server does not provide the
-development proxy; use the API URL configuration appropriate for your deployed
-environment if live API data is required.
+Then open `http://127.0.0.1:3000` (note: no dev proxy in static mode — configure the API URL for your deployment if you need live data).
 
 ### 7. Run the sample end-to-end pipeline
-
-Use a small AOI first. This downloads external imagery and may take time:
 
 ```powershell
 python src/pipeline.py `
@@ -343,15 +321,9 @@ python src/pipeline.py `
   --tower-locations data/sample_towers.geojson
 ```
 
-Pipeline results are written under `data/output/`. The final risk JSON and
-summary are copied to `data/` for API consumption. Check stage logs under
-`data/output/logs/` if a stage fails; optional data sources may fail while the
-core stages continue.
+Results land under `data/output/`; the final risk JSON and summary are copied to `data/` for API consumption. Check `data/output/logs/` if a stage fails — optional data sources may fail while core stages continue.
 
 ### 8. Acquire India-wide NDVI on demand
-
-India-wide imagery is not stored in Git because of its size. The downloader
-uses manageable geographic cells and writes a resumable manifest:
 
 ```powershell
 python src/ingestion/india_ndvi_ingest.py `
@@ -362,14 +334,9 @@ python src/ingestion/india_ndvi_ingest.py `
   --cloud-cover-max 20
 ```
 
-The command searches Copernicus Sentinel-2 L2A scenes and stores downloaded
-bands below `data/india_ndvi/cells/`. Progress is recorded in
-`data/india_ndvi/india_ndvi_manifest.json`, so completed cells are skipped on
-the next run. This operation can require substantial storage, bandwidth, and
-time. It is better to begin with a larger cell size or a smaller date range.
+Searches Copernicus Sentinel-2 L2A scenes and stores bands under `data/india_ndvi/cells/`. Progress is tracked in `data/india_ndvi/india_ndvi_manifest.json` so completed cells are skipped on re-runs. This can be storage/bandwidth/time intensive — start with a larger cell size or smaller date range.
 
-The existing vegetation stage computes NDVI from matching B04 (red) and B08
-(near-infrared) bands:
+Then compute NDVI from matching B04/B08 bands:
 
 ```powershell
 python src/analysis/vegetation_analysis.py `
@@ -379,12 +346,9 @@ python src/analysis/vegetation_analysis.py `
   --ndvi-threshold 0.3
 ```
 
-Repeat this for the downloaded tiles, or automate it after confirming the
-manifest and tile naming for the selected date range.
+Repeat per downloaded tile, or automate after confirming manifest/tile naming for your date range.
 
 ### 9. Score vegetation risk along the India line layer
-
-After creating an NDVI GeoTIFF covering the line network, run:
 
 ```powershell
 python src/ml/corridor_risk_model.py `
@@ -397,13 +361,9 @@ python src/ml/corridor_risk_model.py `
   --ndvi-threshold 0.3
 ```
 
-The output contains GeoJSON line segments with mean NDVI, vegetation fraction,
-sampled-pixel count, risk score, and Low/Medium/High category. The API serves
-it at `http://127.0.0.1:8000/india-corridor-risk` when the file exists.
+Output: GeoJSON line segments with mean NDVI, vegetation fraction, sampled-pixel count, risk score, and Low/Medium/High category — served at `http://127.0.0.1:8000/india-corridor-risk` once the file exists.
 
 ### 10. Run tests and basic checks
-
-With the Python environment activated:
 
 ```powershell
 python -m pytest -q
@@ -418,59 +378,40 @@ npm run build
 Pop-Location
 ```
 
-### Troubleshooting
+</details>
 
-**`ModuleNotFoundError` for `geopandas`, `rasterio`, or another package**
+### 🛠 Troubleshooting
 
-Confirm the virtual environment is active and install from the same
-interpreter:
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-```
-
-If Fiona/GDAL cannot build on the selected Python version, recreate the
-environment with Python 3.11 or 3.12 and install again.
-
-**`npm start` says `package.json` cannot be found**
-
-Run it inside `dashboard`, not the repository root.
-
-**The dashboard shows fallback/demo data**
-
-Start the API on port 8000, confirm `/hotspots` and `/transmission-lines`
-respond, and reload the dashboard. If no generated risk file exists, the API
-uses the checked-in training observations as a first-run fallback.
-
-**No Sentinel-2 scenes are found**
-
-Expand the date range, increase `--cloud-cover-max`, verify the AOI CRS, and
-check internet/STAC access. Do not interpret missing imagery as zero vegetation.
+| Symptom | Fix |
+|---|---|
+| `ModuleNotFoundError` for `geopandas`, `rasterio`, etc. | Confirm the venv is active, then `pip install -r requirements.txt` from the same interpreter. If Fiona/GDAL won't build, recreate the venv on Python 3.11/3.12. |
+| `npm start` says `package.json` cannot be found | Run it inside `dashboard/`, not the repo root. |
+| Dashboard shows fallback/demo data | Start the API on port 8000, confirm `/hotspots` and `/transmission-lines` respond, then reload. With no generated risk file, the API falls back to checked-in training observations. |
+| No Sentinel-2 scenes found | Expand the date range, raise `--cloud-cover-max`, verify AOI CRS, and check STAC connectivity. **Don't** treat missing imagery as zero vegetation. |
 
 ---
 
-## Project Structure
+## 📁 Project Structure
 
 ```
 SIH/
 ├── src/
-│   ├── ingestion/          # Stage 1: Sentinel-2 ingestion
+│   ├── ingestion/          # Stage 1 — Sentinel-2 ingestion
 │   │   └── sentinel2_ingest.py
-│   ├── analysis/           # Stage 2: NDVI + vegetation mask
+│   ├── analysis/           # Stage 2 — NDVI + vegetation mask
 │   │   └── vegetation_analysis.py
-│   ├── spatial/            # Stage 3: Distance features
+│   ├── spatial/            # Stage 3 — Distance features
 │   │   └── spatial_analysis.py
-│   ├── temporal/           # Stage 4: NDVI change / growth
+│   ├── temporal/           # Stage 4 — NDVI change / growth
 │   │   └── temporal_analysis.py
-│   ├── features/           # Stage 5: Feature table
+│   ├── features/           # Stage 5 — Feature table
 │   │   └── feature_engineering.py
-│   ├── risk/               # Stage 6: Heuristic risk scorer
+│   ├── risk/                # Stage 6 — Heuristic risk scorer
 │   │   └── risk_scoring.py
-│   ├── api/                # Stage 7: FastAPI endpoints
+│   ├── api/                 # Stage 7 — FastAPI endpoints
 │   │   └── main.py
-│   └── pipeline.py         # Master orchestrator
-├── dashboard/              # Stage 8: React + Leaflet
+│   └── pipeline.py          # Master orchestrator
+├── dashboard/                # Stage 8 — React + Leaflet
 │   ├── src/
 │   │   ├── App.js
 │   │   ├── index.js
@@ -486,53 +427,34 @@ SIH/
 
 ---
 
-## Known Limitations
+## ⚠️ Known Limitations
 
-These are explicitly documented design constraints for v1 (hackathon prototype):
+Explicitly documented design constraints for v1 (hackathon prototype):
 
-### 1. **10m Resolution Limit** ⚠️
-> Sentinel-2 is 10m resolution — **cannot resolve individual trees near conductors**.
-> Risk scores are **corridor-segment-level**, not tree-level.
-> *Documented in code comments throughout pipeline.*
-
-### 2. **No Canopy Height Data** ⚠️
-> NDVI/vegetation fraction is a **proxy** for risk, not a direct measurement of fall/contact risk.
-> *Explicitly stated in risk score explanations shown to users.*
-
-### 3. **No Historical Ground Truth** ⚠️
-> Risk Model 2 is built as an **EXPLICIT WEIGHTED HEURISTIC SCORER** (transparent, tunable weights),
-> NOT framed as trained supervised ML.
-> A clear extension point exists for supervised training when labeled incident data becomes available.
-> *See `src/risk/risk_scoring.py` — weights are named constants with rationale comments.*
-
-### 4. **Land Cover Not Guaranteed** ⚠️
-> When land cover data is unavailable, the system **flags** when NDVI-high areas might be
-> cropland vs. woody vegetation.
-> *Vegetation class map distinguishes sparse/moderate/dense but cannot differentiate crop types.*
-
-### 5. **Cloud Filtering (Scene-Level Only)** ⚠️
-> Uses scene-level cloud cover metadata (<20% default). No per-pixel cloud masking for v1.
-> SCL band available but not fully utilized.
-
-### 6. **Security: No Auth/RBAC** ⚠️
-> API has **no authentication** for hackathon demo.
-> **TODO comment in `src/api/main.py`** flags this as a gap for any real deployment
-> (infrastructure data sensitivity).
+| # | Limitation | Detail |
+|:---:|---|---|
+| 1 | **10 m Resolution Limit** | Sentinel-2 is 10 m resolution — **cannot resolve individual trees near conductors**. Risk scores are corridor-segment-level, not tree-level. *(documented throughout pipeline code)* |
+| 2 | **No Canopy Height Data** | NDVI / vegetation fraction is a **proxy** for risk, not a direct fall/contact measurement. *(stated in risk explanations shown to users)* |
+| 3 | **No Historical Ground Truth** | Risk scoring is an **explicit weighted heuristic** (transparent, tunable weights) — not framed as trained supervised ML. Extension point exists for supervised training once labeled incident data is available. *(see `src/risk/risk_scoring.py`)* |
+| 4 | **Land Cover Not Guaranteed** | When land cover data is unavailable, the system flags when NDVI-high areas might be cropland vs. woody vegetation — but can't fully distinguish crop types. |
+| 5 | **Cloud Filtering (Scene-Level Only)** | Uses scene-level cloud cover metadata (<20% default); no per-pixel masking in v1. SCL band available but not fully utilized. |
+| 6 | **Security: No Auth / RBAC** | API has **no authentication** for hackathon demo — flagged as a `TODO` in `src/api/main.py` for any real deployment given infrastructure data sensitivity. |
 
 ---
 
-## Configuration
+## ⚙️ Configuration
 
-Key parameters (in `src/pipeline.py` or via CLI):
+**Pipeline parameters** (`src/pipeline.py` or via CLI):
 
 | Parameter | Default | Description |
-|-----------|---------|-------------|
-| `--cloud-cover-max` | 20% | Max scene cloud cover |
-| `--ndvi-threshold` | 0.3 | NDVI threshold for vegetation |
-| `--corridor-buffer-m` | 50m | Corridor half-width |
-| `--days-between` | N/A | Days between observations (temporal) |
+|---|:---:|---|
+| `--cloud-cover-max` | `20%` | Max scene cloud cover |
+| `--ndvi-threshold` | `0.3` | NDVI threshold for vegetation |
+| `--corridor-buffer-m` | `50m` | Corridor half-width |
+| `--days-between` | `N/A` | Days between observations (temporal) |
 
-Risk weights (in `src/risk/risk_scoring.py`):
+**Risk weights** (`src/risk/risk_scoring.py`):
+
 ```python
 WEIGHTS = {
     "proximity": 0.40,   # Distance to line
@@ -545,17 +467,22 @@ THRESHOLDS = {"high": 0.7, "medium": 0.4}
 
 ---
 
-## API Endpoints
+## 🔌 API Endpoints
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /` | API info |
-| `GET /hotspots` | GeoJSON FeatureCollection of risk segments |
-| `GET /hotspots/{id}` | Full detail with breakdown |
-| `GET /summary` | Risk statistics |
-| `GET /ndvi-layer` | NDVI tile metadata |
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/` | API info |
+| `GET` | `/hotspots` | GeoJSON FeatureCollection of risk segments |
+| `GET` | `/hotspots/{id}` | Full detail with score breakdown |
+| `GET` | `/summary` | Risk statistics |
+| `GET` | `/ndvi-layer` | NDVI tile metadata |
+| `GET` | `/india-corridor-risk` | India-wide corridor risk scoring |
+| `GET` | `/model/status` | ML model status |
+| `GET` | `/model/predict` | Inspection-priority prediction |
 
-Example `/hotspots` response:
+<details>
+<summary>Example <code>/hotspots</code> response</summary>
+
 ```json
 {
   "type": "FeatureCollection",
@@ -570,56 +497,47 @@ Example `/hotspots` response:
         "vegetation_fraction": 0.45,
         "mean_dist_to_line_m": 12.3
       },
-      "geometry": { "type": "LineString", "coordinates": [...] }
+      "geometry": { "type": "LineString", "coordinates": ["..."] }
     }
   ],
-  "metadata": { "generated_at": "...", "count": 42, "summary": {...} }
+  "metadata": { "generated_at": "...", "count": 42, "summary": {} }
 }
 ```
 
+</details>
+
 ---
 
-## Future Work (v2+)
+## 🔮 Future Work (v2+)
 
 - [ ] **U-Net segmentation** for vegetation (replace threshold)
 - [ ] **LiDAR canopy height** integration
 - [ ] **Supervised risk model** with outage incident labels
 - [ ] **Land cover classification** (ESA WorldCover / Dynamic World)
 - [ ] **Rolling temporal stats** & seasonal trend modeling
-- [ ] **Auth/RBAC** on API
+- [ ] **Auth / RBAC** on API
 - [ ] **PostGIS backend** for production-scale queries
-- [ ] **LSTM/Transformer** for growth forecasting
+- [ ] **LSTM / Transformer** for growth forecasting
 
 ---
 
-## License
+## 🗂 Data Sources
 
-MIT License — Hackathon prototype for SIH1379.
+| # | Dataset | Source | Purpose |
+|:---:|---|---|---|
+| 1 | **Sentinel-2 Surface Reflectance** (`COPERNICUS/S2_SR_HARMONIZED`) | ESA / Copernicus, via Google Earth Engine | Satellite vegetation monitoring & NDVI calculation |
+| 2 | **GridFinder Power Grid Dataset** | GridFinder / World Bank research dataset | Initial power-grid & transmission-line spatial analysis; distance-to-line calculations |
+| 3 | **PM GatiShakti 220 kV+ Transmission Lines** | Ministry of Power, Government of India | Mapping & validation of high-voltage transmission infrastructure — `data/GatiShakti_Transmission_Lines_220kV_plus.geojson`, `data/GatiShakti_220kV_Transmission_Shapefile.zip` |
+| 4 | **Study Area** | Project-defined geometry | Kanpur region, Uttar Pradesh, India — geographic boundary for vegetation & corridor analysis |
 
-## Data Sources
+---
 
-The project uses the following datasets for vegetation analysis, transmission-line mapping, and validation:
+## 📄 License
 
-### 1. Sentinel-2 Surface Reflectance
-- **Source:** ESA / Copernicus
-- **Google Earth Engine Dataset:** `COPERNICUS/S2_SR_HARMONIZED`
-- **Purpose:** Satellite-based vegetation monitoring and NDVI calculation.
-- **Access:** Google Earth Engine
+MIT License — Hackathon prototype for **SIH1379**.
 
-### 2. GridFinder Power Grid Dataset
-- **Source:** GridFinder / World Bank research dataset
-- **Purpose:** Initial power-grid and transmission-line spatial analysis.
-- **Usage:** Distance-to-power-line analysis and preliminary infrastructure mapping.
+<div align="center">
 
-### 3. PM GatiShakti 220 kV+ Transmission Lines
-- **Source:** Ministry of Power, Government of India, through PM GatiShakti
-- **Dataset:** 220 kV+ transmission lines
-- **Purpose:** Mapping and validation of high-voltage transmission infrastructure.
-- **Local files:**
-  - `data/GatiShakti_Transmission_Lines_220kV_plus.geojson`
-  - `data/GatiShakti_220kV_Transmission_Shapefile.zip`
+Built for Smart India Hackathon 2025 — Problem Statement **SIH1379**
 
-### 4. Study Area
-- **Location:** Kanpur region, Uttar Pradesh, India
-- **Source:** Project-defined geometry
-- **Purpose:** Defines the geographical boundary used for vegetation and transmission-corridor analysis.
+</div>
