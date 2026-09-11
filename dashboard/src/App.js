@@ -11,6 +11,15 @@ import './index.css';
 
 const RISK_COLORS = { High: '#ef4444', Medium: '#f59e0b', Low: '#22c55e' };
 const RISK_ORDER = { High: 0, Medium: 1, Low: 2 };
+const VEGETATION_COLORS = { High: '#15803d', Medium: '#84cc16', Low: '#d9f99d', Unknown: '#94a3b8' };
+
+function vegetationLevelOf(ndvi) {
+  if (ndvi == null || Number.isNaN(Number(ndvi))) return 'Unknown';
+  const value = Number(ndvi);
+  if (value < 0.3) return 'Low';
+  if (value < 0.6) return 'Medium';
+  return 'High';
+}
 
 // Deterministic pseudo "growth trend" per segment so numbers stay stable
 const growthOf = (s) => (s.id * 7) % 41 + 8;
@@ -27,14 +36,15 @@ function parseHotspots(geojson) {
       veg: Math.round((f.properties.vegetation_fraction ?? 0) * 100),
       d: Math.round(f.properties.mean_dist_to_line_m ?? 0),
       ndvi: f.properties.ndvi != null ? +Number(f.properties.ndvi).toFixed(2) : null,
+      vegetationLevel: vegetationLevelOf(f.properties.ndvi),
     }));
 }
 
 function downloadCSV(rows) {
-  const header = 'segment_id,risk,score,vegetation_%,ndvi,distance_m,lat,lon\n';
+  const header = 'segment_id,risk,vegetation_level,score,vegetation_%,ndvi,distance_m,lat,lon\n';
   const body = rows
     .map((s) =>
-      [s.id, s.risk, s.score.toFixed(3), s.veg, s.ndvi ?? '', s.d, s.y.toFixed(5), s.x.toFixed(5)].join(',')
+      [s.id, s.risk, s.vegetationLevel, s.score.toFixed(3), s.veg, s.ndvi ?? '', s.d, s.y.toFixed(5), s.x.toFixed(5)].join(',')
     )
     .join('\n');
   const blob = new Blob([header + body], { type: 'text/csv;charset=utf-8;' });
@@ -78,8 +88,16 @@ function FlyTo({ spot }) {
 function Legend() {
   return (
     <div className="legend">
+      <b>Risk</b>
       {Object.entries(RISK_COLORS).map(([k, c]) => (
-        <span key={k}>
+        <span key={`risk-${k}`}>
+          <i style={{ background: c }} />
+          {k}
+        </span>
+      ))}
+      <b>NDVI</b>
+      {Object.entries(VEGETATION_COLORS).filter(([k]) => k !== 'Unknown').map(([k, c]) => (
+        <span key={`vegetation-${k}`}>
           <i style={{ background: c }} />
           {k}
         </span>
@@ -122,6 +140,8 @@ function RiskMap({ spots, lines, layers, pick, selected, fitKey }) {
                   <b>LOC-{s.id}</b>
                   <br />
                   Risk: {s.risk} · score {(s.score * 100).toFixed(0)}
+                  <br />
+                  Vegetation: {s.vegetationLevel} · NDVI {s.ndvi ?? 'n/a'}
                   <br />
                   Distance to line: {s.d} m
                 </Tooltip>
@@ -343,6 +363,7 @@ function Details({ spot, goBack, inspect, inspected }) {
         <div className="metric-row">
           {[
             ['NDVI', spot.ndvi != null ? spot.ndvi : '—'],
+            ['Vegetation level', spot.vegetationLevel],
             ['Vegetation density', `${spot.veg}%`],
             ['Growth trend', `+${growth}%`],
             ['Distance to line', `${spot.d} m`],
@@ -470,6 +491,9 @@ function Analytics({ allSpots }) {
       high: allSpots.filter((s) => s.risk === 'High').length,
       med: allSpots.filter((s) => s.risk === 'Medium').length,
       low: allSpots.filter((s) => s.risk === 'Low').length,
+      vegetationHigh: allSpots.filter((s) => s.vegetationLevel === 'High').length,
+      vegetationMedium: allSpots.filter((s) => s.vegetationLevel === 'Medium').length,
+      vegetationLow: allSpots.filter((s) => s.vegetationLevel === 'Low').length,
     };
   }, [allSpots]);
 
@@ -544,6 +568,22 @@ function Analytics({ allSpots }) {
             <b>{count} ({Math.round((count / total) * 100)}%)</b>
           </div>
         ))}
+      </section>
+      <section className="card dist-card">
+        <p className="eyebrow">ISRO NDVI classification</p>
+        <h2>Vegetation index across observations</h2>
+        {[
+          ['High', stats.vegetationHigh, VEGETATION_COLORS.High],
+          ['Medium', stats.vegetationMedium, VEGETATION_COLORS.Medium],
+          ['Low', stats.vegetationLow, VEGETATION_COLORS.Low],
+        ].map(([label, count, color]) => (
+          <div className="dist-row" key={`vegetation-${label}`}>
+            <span>{label}</span>
+            <div className="dist-track"><i style={{ width: `${(count / total) * 100}%`, background: color }} /></div>
+            <b>{count} ({Math.round((count / total) * 100)}%)</b>
+          </div>
+        ))}
+        <small>Low &lt; 0.30 · Medium 0.30–&lt;0.60 · High ≥ 0.60 NDVI</small>
       </section>
     </>
   );
